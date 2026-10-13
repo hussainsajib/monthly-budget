@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 from sqlalchemy import delete
 
@@ -137,6 +139,50 @@ def test_transaction_crud_and_listing(client, ids):
 
     assert client.delete(f"/api/transactions/{created['id']}").status_code == 204
     assert client.get(f"/api/transactions/{created['id']}").status_code == 404
+
+
+def test_transaction_duplicate_lookup(client, ids):
+    cats, accs = ids
+    client.post("/api/transactions", json=_txn_body(cats, accs, description="Corner Cafe", amount="39.55"))
+
+    hit = client.get(
+        "/api/transactions/duplicates",
+        params={"date": "2026-05-04", "amount": "39.55", "account_id": accs["Chequing"]},
+    ).json()
+    assert [h["description"] for h in hit] == ["Corner Cafe"]
+
+    # a different amount on the same day/account is not a duplicate
+    assert (
+        client.get(
+            "/api/transactions/duplicates",
+            params={"date": "2026-05-04", "amount": "10", "account_id": accs["Chequing"]},
+        ).json()
+        == []
+    )
+
+    # a refund of the same amount still matches (amount is compared in absolute terms)
+    assert (
+        client.get(
+            "/api/transactions/duplicates",
+            params={"date": "2026-05-04", "amount": "-39.55", "account_id": accs["Chequing"]},
+        ).json()[0]["description"]
+        == "Corner Cafe"
+    )
+
+    # editing a row never flags itself
+    existing_id = client.get("/api/transactions").json()["items"][0]["id"]
+    assert (
+        client.get(
+            "/api/transactions/duplicates",
+            params={
+                "date": "2026-05-04",
+                "amount": "39.55",
+                "account_id": accs["Chequing"],
+                "exclude_id": existing_id,
+            },
+        ).json()
+        == []
+    )
 
 
 def test_transaction_validation_errors_are_plain_messages(client, ids, db):
@@ -320,6 +366,22 @@ CSV = (
 )
 
 
+def test_import_rule_matches_on_amount(client, ids):
+    cats, accs = ids
+    cc = accs["Credit Card"]
+    files = {"file": ("bank.csv", CSV, "text/csv")}
+    data = {"account_id": str(cc), "amount_sign": "positive_is_expense"}
+
+    rule = {"match_text": "", "amount": "45.10", "account_id": cc, "category_id": cats["Dining Out / Takeout"]}
+    rule_id = client.post("/api/import-rules", json=rule).json()["id"]
+    try:
+        rows = client.post("/api/import/preview", files=files, data=data).json()
+        assert rows[0]["category_id"] == cats["Dining Out / Takeout"]  # the 45.10 charge matches
+        assert rows[1]["category_id"] is None  # the 500.00 deposit doesn't
+    finally:
+        client.delete(f"/api/import-rules/{rule_id}")
+
+
 def test_recurring_schedule_budget(client, ids):
     cats, accs = ids
 
@@ -386,6 +448,55 @@ def test_import_preview_and_commit_are_idempotent(client, ids):
 def test_import_rejects_unreadable_files(client):
     res = client.post("/api/import/preview", files={"file": ("x.csv", "foo,bar\n1,2\n", "text/csv")})
     assert res.status_code == 400 and "columns" in res.json()["detail"]
+
+
+def test_import_rules_auto_assign_in_preview(client, ids):
+    cats, accs = ids
+    cc = accs["Credit Card"]
+    files = {"file": ("bank.csv", CSV, "text/csv")}
+    data = {"account_id": str(cc), "amount_sign": "positive_is_expense"}
+
+    # validation: a rule needs at least one identifier (text, amount or date), a real account and
+    # an assignable (non-section) category
+    section = next(r["id"] for r in client.get("/api/categories").json() if r["depth"] == 0)
+    base = {"match_text": "FRESH MART", "account_id": cc, "category_id": cats["Dining Out / Takeout"]}
+    nothing_to_match = {"match_text": "", "account_id": cc, "category_id": cats["Dining Out / Takeout"]}
+    assert client.post("/api/import-rules", json=nothing_to_match).status_code == 400
+    bad_section = base | {"day_from": 1, "category_id": section}
+    assert client.post("/api/import-rules", json=bad_section).status_code == 400
+    bad_account = {**base, "account_id": 999999, "day_from": 1}
+    assert client.post("/api/import-rules", json=bad_account).status_code == 400
+    # a rule with text but no date is now valid
+    text_only = client.post("/api/import-rules", json=base).json()["id"]
+    client.delete(f"/api/import-rules/{text_only}")
+
+    # no history, no rules -> the merchant is uncategorized
+    first = client.post("/api/import/preview", files=files, data=data).json()
+    assert first[0]["category_id"] is None
+
+    rule_id = client.post(
+        "/api/import-rules", json=base | {"day_from": 1, "day_to": 5}
+    ).json()["id"]
+    try:
+        rows = client.post("/api/import/preview", files=files, data=data).json()
+        assert rows[0]["category_id"] == cats["Dining Out / Takeout"]  # assigned by the rule
+        assert rows[1]["category_id"] is None  # income row doesn't match -> stays unassigned
+    finally:
+        client.delete(f"/api/import-rules/{rule_id}")
+
+    # history wins over an explicit rule: once the merchant is learned, the rule is ignored
+    rule_id = client.post(
+        "/api/import-rules", json=base | {"day_from": 1, "day_to": 5}
+    ).json()["id"]
+    try:
+        category_for = {"out": cats["Grocery"], "in": cats["Other Income"]}
+        fields = ("date", "description", "amount_cents", "direction", "key")
+        good = [{k: r[k] for k in fields} | {"category_id": category_for[r["direction"]]} for r in rows]
+        assert client.post("/api/import/commit", json={"account_id": cc, "rows": good}).json() == {"imported": 2}
+        again = client.post("/api/import/preview", files=files, data=data).json()
+        assert again[0]["category_id"] == cats["Grocery"]  # learned, not the rule's Takeout
+    finally:
+        client.delete(f"/api/import-rules/{rule_id}")
 
 
 def test_report_and_cashflow_shapes(client, ids):
@@ -515,3 +626,44 @@ def test_healthz_is_open_and_everything_else_needs_auth_when_a_password_is_set()
         assert guarded.get(path).status_code == 401, path
     assert guarded.get("/api/categories", auth=("me", "wrong")).status_code == 401
     assert guarded.get("/api/categories", auth=("me", "s3cret")).status_code == 200
+
+
+def test_clear_transactions_removes_rows_and_keeps_setup(client, ids):
+    cats, accs = ids
+    assert client.post("/api/transactions", json=_txn_body(cats, accs)).status_code == 201
+    before = client.get("/api/transactions").json()["total"]
+    assert before >= 1
+
+    res = client.delete("/api/transactions")
+    assert res.status_code == 200
+    assert res.json()["deleted"] == before
+    assert client.get("/api/transactions").json()["total"] == 0
+
+    # Setup survives a clear.
+    assert client.get("/api/categories").status_code == 200
+    assert client.get("/api/accounts").status_code == 200
+
+
+def test_clear_transactions_imported_only_keeps_hand_entered(client, ids, db):
+    cats, accs = ids
+    client.post("/api/transactions", json=_txn_body(cats, accs, description="Manual entry"))
+    db.add(
+        Transaction(
+            date=date(2026, 5, 4),
+            description="Imported row",
+            category_id=cats["Dining Out / Takeout"],
+            account_id=accs["Chequing"],
+            amount_cents=100,
+            import_hash="clear-test-hash",
+        )
+    )
+    db.commit()
+
+    res = client.delete("/api/transactions", params={"imported_only": "true"})
+    assert res.status_code == 200
+    assert res.json()["deleted"] == 1
+
+    descriptions = [t["description"] for t in client.get("/api/transactions").json()["items"]]
+    assert "Manual entry" in descriptions
+    assert "Imported row" not in descriptions
+

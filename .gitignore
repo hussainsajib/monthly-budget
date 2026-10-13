@@ -19,6 +19,7 @@ frontend/dist/
 # CI caches
 .cache/
 frontend/.npm/
+.impeccable/
 
 # Your own setup (categories, budgets, accounts) exported by `python -m app.cli export-config`
 personal/

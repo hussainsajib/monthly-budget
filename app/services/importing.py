@@ -13,8 +13,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.money import to_cents
-from app.models import Category, Transaction
-from app.services import suggestions
+from app.models import TRANSFER, Category, Transaction
+from app.services import import_rules, suggestions
 from app.services.category_config import income_keys
 
 DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%Y/%m/%d", "%d-%b-%Y", "%b %d, %Y", "%m/%d/%y")
@@ -38,6 +38,7 @@ class ParsedRow:
     category_id: int | None = None
     duplicate: bool = False
     key: str = ""
+    recurring_template_id: int | None = None
 
 
 def parse_date(text: str) -> date:
@@ -144,11 +145,36 @@ def prepare_preview(db: Session, rows: list[ParsedRow], account_id: int | None) 
         if rows
         else set()
     )
+    rules = import_rules.active_rules(db)
     for row in rows:
         hit = suggestions.lookup(index, row.description)
-        row.category_id = hit.category_id if hit else None
+        # Explicit rules only fill in where history (with its exact/fuzzy matching) has no answer.
+        row.category_id = (
+            hit.category_id
+            if hit
+            else import_rules.match(rules, row.description, account_id, row.date, row.amount_cents)
+        )
         row.duplicate = row.key in known_hashes or (row.date, row.amount_cents, account_id) in existing
     return rows
+
+
+def apply_rules(db: Session, rows: list[ParsedRow], account_id: int | None) -> None:
+    """Fill categories a preview left blank, using history then the current rules.
+
+    Rows that already carry a category (history, a rule that ran earlier, or the user's own pick)
+    are left untouched, so applying a freshly added rule never overwrites a deliberate choice.
+    """
+    index = suggestions.build_index(db)
+    rules = import_rules.active_rules(db)
+    for row in rows:
+        if row.category_id is not None:
+            continue
+        hit = suggestions.lookup(index, row.description)
+        row.category_id = (
+            hit.category_id
+            if hit
+            else import_rules.match(rules, row.description, account_id, row.date, row.amount_cents)
+        )
 
 
 def signed_amount(direction: str, is_income: bool, cents: int) -> int:
@@ -161,14 +187,21 @@ def commit_rows(db: Session, rows: list[ParsedRow], account_id: int | None) -> i
     kinds = {c.id: c.kind for c in db.scalars(select(Category))}
     income = income_keys(db)
     for row in rows:
+        kind = kinds[row.category_id]
+        if kind == TRANSFER:
+            # A transfer leg is stored with the signed effect on its account (out negative, in positive).
+            amount_cents = -row.amount_cents if row.direction == "out" else row.amount_cents
+        else:
+            amount_cents = signed_amount(row.direction, kind in income, row.amount_cents)
         db.add(
             Transaction(
                 date=row.date,
                 description=row.description[:200],
                 category_id=row.category_id,
                 account_id=account_id,
-                amount_cents=signed_amount(row.direction, kinds[row.category_id] in income, row.amount_cents),
+                amount_cents=amount_cents,
                 import_hash=row.key,
+                recurring_template_id=row.recurring_template_id,
             )
         )
     db.commit()

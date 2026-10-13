@@ -152,7 +152,7 @@ export function CategorySelect({
   const section = sectionId != null ? categories.find((c) => c.id === sectionId) : undefined
 
   const sectionOptions: Option[] = sections
-    .filter((c) => c.id === sectionId || c.id === value || (c.is_active && !exclude?.has(c.id)))
+    .filter((c) => c.id === sectionId || c.id === value || ((c.is_active || c.kind === 'transfer') && !exclude?.has(c.id)))
     .map((c) => ({ value: String(c.id), label: labelOf(c) }))
 
   const subOptions: Option[] = categories
@@ -160,7 +160,7 @@ export function CategorySelect({
       if (sectionId == null || !isUnder(categories, c, sectionId)) return false
       if (c.id === value) return true // keep the current choice visible even if archived
       if (exclude?.has(c.id)) return false
-      if (!c.is_active) return false
+      if (!c.is_active && c.kind !== 'transfer') return false
       if (parentMode && c.depth > MAX_PARENT_DEPTH) return false
       return true
     })

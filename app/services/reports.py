@@ -13,7 +13,7 @@ from datetime import date
 from sqlalchemy import extract, func, select
 from sqlalchemy.orm import Session
 
-from app.models import Transaction
+from app.models import TRANSFER, Category, Transaction
 from app.services import budgets
 from app.services.categories import Node, load_tree
 from app.services.category_config import income_keys
@@ -88,6 +88,17 @@ def _add(a: list[int], b: list[int]) -> list[int]:
     return [x + y for x, y in zip(a, b, strict=True)]
 
 
+def _display_depth(node: Node) -> int:
+    """Depth ignoring the hidden "Transfer" system category, so its sub-categories read as top-level."""
+    depth = 0
+    parent = node.parent
+    while parent is not None:
+        if parent.category.kind != TRANSFER:
+            depth += 1
+        parent = parent.parent
+    return depth
+
+
 def _shift_month(month: date, delta: int) -> date:
     """First of the month ``delta`` months after (or before, if negative) ``month``."""
     index = month.year * 12 + (month.month - 1) + delta
@@ -113,7 +124,13 @@ def budget_report(db: Session, window_months: int = WINDOW_MONTHS, as_of: date |
     year, month = extract("year", Transaction.date), extract("month", Transaction.date)
     stmt = (
         select(Transaction.category_id, year.label("y"), month.label("m"), func.sum(Transaction.amount_cents))
-        .where(Transaction.date >= window[0], Transaction.date <= as_of)
+        .where(
+            Transaction.date >= window[0],
+            Transaction.date <= as_of,
+            Transaction.transfer_id.is_(None),  # transfers are not income or expense
+            ~Transaction.category.has(Category.kind == TRANSFER),  # pending transfer legs neither
+            Transaction.reimbursement_id.is_(None),  # connected reimbursements are not income or expense
+        )
         .group_by(Transaction.category_id, year, month)
     )
     own: dict[int, list[int]] = defaultdict(lambda: [0] * n)
@@ -141,13 +158,13 @@ def budget_report(db: Session, window_months: int = WINDOW_MONTHS, as_of: date |
             months = _add(months, child_months)
             node_budgets = _add(node_budgets, child_budgets)
         cat = node.category
-        if cat.is_active or any(months):
+        if cat.kind != TRANSFER and (cat.is_active or any(months)):
             budget = node.effective_budget_cents
             avg = _average(sum(months), len(active_months))
             rows[slot] = ReportRow(
                 node.id,
                 node.name,
-                node.depth,
+                _display_depth(node),
                 cat.kind,
                 cat.kind in income,
                 bool(node.children),

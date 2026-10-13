@@ -54,7 +54,8 @@ def scratch():
 
 def test_roundtrip_reproduces_the_setup_exactly(scratch):
     counts = import_config(scratch, SETUP)
-    assert counts == {"categories": 5, "accounts": 2, "recurring": 1, "monthly_budgets": 1, "settings": 1}
+    expected = {"categories": 5, "accounts": 2, "recurring": 1, "monthly_budgets": 1, "import_rules": 0, "settings": 1}
+    assert counts == expected
 
     exported = export_config(scratch)
     assert [c["path"] for c in exported["categories"]] == [c["path"] for c in SETUP["categories"]]

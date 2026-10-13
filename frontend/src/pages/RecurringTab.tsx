@@ -419,12 +419,13 @@ function BasicFields({ draft, onChange, idPrefix }: { draft: Draft; onChange: (d
           onChange={(e) => set('description', e.target.value)}
         />
       </div>
-      <div className="field-full">
+      <div className="field-full category-cascade">
         <CategorySelect
           id={`${idPrefix}-cat`}
           categories={categories.data ?? []}
           value={draft.category_id}
           onChange={(id) => set('category_id', id)}
+          cascade
           required
         />
       </div>
@@ -627,7 +628,7 @@ function RecurringTile({
       </div>
       <div className="tile-value">{formatMoney(template.amount_cents)}</div>
       <div className="tile-meta" title={template.category_path}>
-        {template.category_path}
+        {template.category_path.split(' \u203a ').pop()}
       </div>
       <div className="tile-foot">
         <span className="chip">{scheduleSummary(template.schedule ?? fromTemplate(template).schedule)}</span>
@@ -756,7 +757,7 @@ export default function RecurringTab() {
       id: 'category',
       accessorKey: 'category_path',
       header: ({ column }) => <SortHeader column={column} label="Category" />,
-      cell: ({ row }) => row.original.category_path,
+      cell: ({ row }) => row.original.category_path.split(' \u203a ').pop(),
     },
     {
       id: 'account',

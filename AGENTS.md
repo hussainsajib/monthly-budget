@@ -40,22 +40,50 @@ Project conventions. Follow these when building or editing the frontend UI.
 - API handlers in `app/api/data.py` parse input and shape JSON; business rules live in
   `app/services/`. Money is integer cents. Migrations create schema only.
 
-## Commands (run after UI changes)
+## UI checks (run after any frontend change)
 
 ```bash
 # frontend/
 npm run lint:design
 npm run typecheck
 npm run build
+```
 
+## Commands (backend checks)
+
+```bash
 # repo root
 pytest
 ruff check .
 ```
 
+## Run / boot (after checking out on a new machine)
+
+Requires Python 3 + Node.js. Rebuild dirs (`.venv`, `frontend/node_modules`,
+`frontend/dist`) are gitignored and regenerate on `pip install`/`npm install`.
+
+```bash
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements-dev.txt
+alembic upgrade head            # create/migrate data\budget.db (schema only)
+cd frontend && npm install && npm run build && cd ..
+uvicorn app.main:app --reload   # http://127.0.0.1:8000 serves API + built UI
+```
+
+Bringing an existing `data/budget.db`? Just `alembic upgrade head` to migrate it and
+skip `pip`/`npm` setup in the venv sense. UI dev with hot reload: `npm run dev` in
+`frontend/` (proxies `/api` to uvicorn on 8000).
+
 ## Reusable skills
 
 Global skills (react-select pickers, TanStack tables, UI feedback, design
-guardrails) are registered in `~/.config/opencode/opencode.jsonc` under
-`skills.paths`, pointing at the `ai-skills` repo. They load automatically when a
-task matches.
+guardrails, impeccable) are registered in `~/.config/opencode/opencode.jsonc`
+under `skills.paths`, pointing at the `ai-skills` repo. They load automatically
+when a task matches.
+
+**Design precedence:** this project's own design system wins. `docs/design-guardrails.md`
+plus the tokens in `frontend/src/styles.css` are the source of truth for colors, fonts,
+spacing, and components. Use `impeccable` for design judgement and craft (hierarchy,
+critique, polish, motion, copy) on top of that system — never to replace or override
+this repo's tokens, components, or guardrails. When they conflict, follow the repo.

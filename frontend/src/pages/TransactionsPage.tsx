@@ -8,7 +8,7 @@ import {
   type SortingState,
 } from '@tanstack/react-table'
 import { ChevronLeft, ChevronRight, X } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import ReactPaginateImport from 'react-paginate'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { Tooltip } from 'react-tooltip'
@@ -16,6 +16,7 @@ import { api } from '../api'
 import { DEFAULT_LEVELS, isIncomeKind } from '../categoryConfig'
 import { AccountSelect, CategoryFilter } from '../components/selects'
 import { Bar, SortHeader } from '../components/table'
+import TransferForm, { type TransferFormValues } from '../components/TransferForm'
 import TxnForm, { type TxnFormValues } from '../components/TxnForm'
 import { Modal } from '../components/ui'
 import { formatMoney, todayIso } from '../money'
@@ -67,6 +68,15 @@ const blankForm = (date: string): TxnFormValues => ({
   category_id: null,
   account_id: null,
   amount: '',
+  notes: '',
+})
+
+const blankTransfer = (date: string): TransferFormValues => ({
+  date,
+  description: '',
+  amount: '',
+  from_account_id: null,
+  to_account_id: null,
   notes: '',
 })
 
@@ -126,6 +136,9 @@ export default function TransactionsPage() {
   const [advanced, setAdvanced] = useState(false)
   const [customRange, setCustomRange] = useState<{ start: string; end: string } | null>(null)
   const [sorting, setSorting] = useState<SortingState>([{ id: 'date', desc: true }])
+  const [addMode, setAddMode] = useState<'txn' | 'transfer'>('txn')
+  const [transferInitial, setTransferInitial] = useState<TransferFormValues>(() => blankTransfer(todayIso()))
+  const [selected, setSelected] = useState<Set<number>>(new Set())
 
   const sort = sorting[0]?.id ?? 'date'
   const dir = sorting[0] && sorting[0].desc === false ? 'asc' : 'desc'
@@ -235,6 +248,70 @@ export default function TransactionsPage() {
   const items = list.data?.items ?? []
   const from = location.pathname + location.search
 
+  // Drop any selection that fell off the page (re-filter, new page, refresh).
+  useEffect(() => {
+    setSelected((prev) => {
+      const keep = new Set(prev)
+      for (const id of prev) if (!items.some((i) => i.id === id)) keep.delete(id)
+      return keep.size === prev.size ? prev : keep
+    })
+  }, [items])
+
+  const selectedItems = items.filter((i) => selected.has(i.id))
+  const deltaOf = (t: Txn) => (isIncomeKind(config, t.kind) ? t.amount_cents : -t.amount_cents)
+  const a = selectedItems[0]
+  const b = selectedItems[1]
+  const da = a ? deltaOf(a) : 0
+  const db = b ? deltaOf(b) : 0
+  const connectable =
+    selectedItems.length === 2 &&
+    da !== 0 &&
+    db !== 0 &&
+    Math.sign(da) !== Math.sign(db) &&
+    Math.abs(da) === Math.abs(db) &&
+    a.account_id != null &&
+    b.account_id != null &&
+    a.account_id !== b.account_id
+  const connectFromId = da < 0 ? a?.id : b?.id
+  const connectToId = da < 0 ? b?.id : a?.id
+
+  const toggleSelected = (id: number, on: boolean) =>
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (on) next.add(id)
+      else next.delete(id)
+      return next
+    })
+
+  async function connectTransfer() {
+    if (!connectable || connectFromId == null || connectToId == null) return
+    const ok = await run(
+      () => api.connectTransfer(connectFromId, connectToId).then((r) => r.transfer_id),
+      () => 'Connected as a transfer',
+    )
+    if (ok) setSelected(new Set())
+  }
+
+  const connectableReimbursement =
+    selectedItems.length === 2 &&
+    da !== 0 &&
+    db !== 0 &&
+    Math.sign(da) !== Math.sign(db) &&
+    Math.abs(da) === Math.abs(db) &&
+    a?.kind === 'reimbursement' &&
+    b?.kind === 'reimbursement' &&
+    a.reimbursement_id == null &&
+    b.reimbursement_id == null
+
+  async function connectReimbursement() {
+    if (!connectableReimbursement || !a || !b) return
+    const ok = await run(
+      () => api.connectReimbursement(a.id, b.id).then((r) => r.reimbursement_id),
+      () => 'Connected as a reimbursement',
+    )
+    if (ok) setSelected(new Set())
+  }
+
   const chips: { key: string; label: string; clear: () => void }[] = []
   if (filters.q) chips.push({ key: 'q', label: `Search: ${filters.q}`, clear: () => clearField('q') })
   if (rangeKey !== 'all') {
@@ -261,6 +338,30 @@ export default function TransactionsPage() {
 
   const columns: ColumnDef<Txn>[] = [
     {
+      id: 'select',
+      enableSorting: false,
+      header: () => (
+        <input
+          type="checkbox"
+          aria-label="Select all on this page"
+          checked={items.length > 0 && items.every((i) => selected.has(i.id))}
+          onChange={(e) =>
+            setSelected(e.target.checked ? new Set(items.map((i) => i.id)) : new Set())
+          }
+        />
+      ),
+      cell: ({ row }) => (
+        <input
+          type="checkbox"
+          aria-label={`Select ${row.original.description}`}
+          checked={selected.has(row.original.id)}
+          onChange={(e) => toggleSelected(row.original.id, e.target.checked)}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        />
+      ),
+    },
+    {
       id: 'date',
       accessorKey: 'date',
       header: ({ column }) => <SortHeader column={column} label="Date" />,
@@ -274,6 +375,8 @@ export default function TransactionsPage() {
         <>
           {row.original.description}
           {row.original.planned && <span className="chip">planned</span>}
+          {row.original.reimbursement_id && <span className="chip">reimbursed</span>}
+          {row.original.recurring_description && <span className="chip">recurring · {row.original.recurring_description}</span>}
         </>
       ),
     },
@@ -282,14 +385,23 @@ export default function TransactionsPage() {
       id: 'account',
       accessorKey: 'account_name',
       header: ({ column }) => <SortHeader column={column} label="Account" />,
-      cell: ({ row }) => row.original.account_name ?? '—',
+      cell: ({ row }) => (
+        <>
+          {row.original.account_name ?? '—'}
+          {row.original.transfer_account_name && (
+            <span className="chip">{row.original.transfer_account_name}</span>
+          )}
+        </>
+      ),
     },
     {
       id: 'amount',
       accessorKey: 'amount_cents',
       header: ({ column }) => <SortHeader column={column} label="Amount" />,
       cell: ({ row }) => (
-        <span className={isIncomeKind(config, row.original.kind) ? 'under' : ''}>{formatMoney(row.original.amount_cents)}</span>
+        <span className={isIncomeKind(config, row.original.kind) ? 'under' : ''}>
+          {formatMoney(row.original.amount_cents)}
+        </span>
       ),
     },
   ]
@@ -506,6 +618,31 @@ export default function TransactionsPage() {
       )}
 
       {list.isError && <div className="flash err">{list.error?.message ?? 'Failed to load'}</div>}
+      {selected.size > 0 && (
+        <div className="row table-toolbar" style={{ alignItems: 'center' }}>
+          <span className="small muted">{selected.size} selected</span>
+          {selectedItems.length === 2 && !connectable && !connectableReimbursement && (
+            <span className="small muted">
+              Pick one money-out and one money-in for the same amount: on two different accounts for a
+              transfer, or both tagged Reimbursable for a reimbursement (your outlay + the repayment).
+            </span>
+          )}
+          <span className="push" />
+          {selectedItems.length === 2 && connectable && (
+            <button type="button" className="shrink" onClick={connectTransfer}>
+              Connect as transfer
+            </button>
+          )}
+          {selectedItems.length === 2 && connectableReimbursement && (
+            <button type="button" className="secondary shrink" onClick={connectReimbursement}>
+              Connect as reimbursement
+            </button>
+          )}
+          <button type="button" className="secondary small shrink" onClick={() => setSelected(new Set())}>
+            Clear
+          </button>
+        </div>
+      )}
       <div className="card table-wrap">
         {list.isPending ? (
           <TableSkeleton levels={levels} />
@@ -577,22 +714,51 @@ export default function TransactionsPage() {
 
       {adding && (
         <Modal title="Add transaction" onClose={() => setAdding(false)}>
-          <TxnForm
-            big
-            initial={initial}
-            descriptions={descriptions.data ?? []}
-            submitLabel="Add"
-            onSubmit={async (v) => {
-              const created = await run(
-                () => api.createTransaction(v),
-                (t) => `Added ${t.description}`,
-              )
-              if (created) {
-                setAdding(false)
-                setInitial(blankForm(todayIso()))
+          <div className="segmented" role="group" aria-label="Entry type">
+            <button type="button" className={addMode === 'txn' ? 'on' : ''} onClick={() => setAddMode('txn')}>
+              Transaction
+            </button>
+            <button type="button" className={addMode === 'transfer' ? 'on' : ''} onClick={() => setAddMode('transfer')}>
+              Transfer
+            </button>
+          </div>
+          {addMode === 'txn' ? (
+            <TxnForm
+              big
+              initial={initial}
+              descriptions={descriptions.data ?? []}
+              submitLabel="Add"
+              findDuplicates={(v) =>
+                api.transactionDuplicates({ date: v.date, amount: v.amount, account_id: v.account_id })
               }
-            }}
-          />
+              onSubmit={async (v) => {
+                const created = await run(
+                  () => api.createTransaction(v),
+                  (t) => `Added ${t.description}`,
+                )
+                if (created) {
+                  setAdding(false)
+                  setInitial(blankForm(todayIso()))
+                }
+              }}
+            />
+          ) : (
+            <TransferForm
+              big
+              initial={transferInitial}
+              submitLabel="Add"
+              onSubmit={async (v) => {
+                const created = await run(
+                  () => api.createTransfer(v).then((r) => r.transfer_id),
+                  () => 'Added transfer',
+                )
+                if (created) {
+                  setAdding(false)
+                  setTransferInitial(blankTransfer(todayIso()))
+                }
+              }}
+            />
+          )}
         </Modal>
       )}
 

@@ -13,7 +13,17 @@ from datetime import date
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from app.models import Account, AppSetting, Category, MonthlyBudget, RecurringTemplate, Transaction
+from app.models import (
+    REIMBURSEMENT,
+    TRANSFER,
+    Account,
+    AppSetting,
+    Category,
+    ImportRule,
+    MonthlyBudget,
+    RecurringTemplate,
+    Transaction,
+)
 from app.services.account_config import ensure_account_config
 from app.services.categories import MAX_DEPTH, Node, load_tree
 from app.services.category_config import ensure_category_config, type_keys
@@ -55,6 +65,7 @@ def export_config(db: Session) -> dict:
             "is_active": n.category.is_active,
         }
         for n in tree.walk()  # parents always precede their children
+        if n.category.kind not in (TRANSFER, REIMBURSEMENT)  # system categories are not user config
     ]
     accounts = [
         {
@@ -82,6 +93,18 @@ def export_config(db: Session) -> dict:
         {"month": b.month.strftime("%Y-%m"), "category": path_of[b.category_id], "amount_cents": b.amount_cents}
         for b in db.scalars(select(MonthlyBudget).order_by(MonthlyBudget.month, MonthlyBudget.category_id))
     ]
+    import_rules = [
+        {
+            "match_text": r.match_text,
+            "amount_cents": r.amount_cents,
+            "account": r.account.name if r.account else None,
+            "category": path_of.get(r.category_id, [r.category.name if r.category else str(r.category_id)]),
+            "day_from": r.day_from,
+            "day_to": r.day_to,
+            "is_active": r.is_active,
+        }
+        for r in db.scalars(select(ImportRule).order_by(ImportRule.sort_order, ImportRule.id))
+    ]
     settings = {s.key: s.value for s in db.scalars(select(AppSetting).order_by(AppSetting.key))}
     return {
         "version": FORMAT_VERSION,
@@ -89,6 +112,7 @@ def export_config(db: Session) -> dict:
         "accounts": accounts,
         "recurring": recurring,
         "monthly_budgets": monthly_budgets,
+        "import_rules": import_rules,
         "settings": settings,
     }
 
@@ -105,6 +129,7 @@ def _wipe_setup(db: Session) -> None:
         )
     db.execute(delete(MonthlyBudget))
     db.execute(delete(RecurringTemplate))
+    db.execute(delete(ImportRule))
     # parent_id is ON DELETE RESTRICT: remove leaves first, repeatedly, until nothing is left
     while True:
         parents = select(Category.parent_id).where(Category.parent_id.is_not(None))
@@ -142,7 +167,14 @@ def import_config(db: Session, data: dict, replace: bool = False) -> dict[str, i
 
 
 def _apply(db: Session, data: dict) -> dict[str, int]:
-    counts = {"categories": 0, "accounts": 0, "recurring": 0, "monthly_budgets": 0, "settings": 0}
+    counts = {
+        "categories": 0,
+        "accounts": 0,
+        "recurring": 0,
+        "monthly_budgets": 0,
+        "import_rules": 0,
+        "settings": 0,
+    }
 
     # categories, matched by path
     by_path: dict[Path, Category] = {tuple(_names(n)): n.category for n in load_tree(db).walk()}
@@ -224,6 +256,29 @@ def _apply(db: Session, data: dict) -> dict[str, int]:
             db.add(row)
         row.amount_cents = int(entry["amount_cents"])
         counts["monthly_budgets"] += 1
+
+    # import rules, matched by (account, category, match_text)
+    existing_rules = list(db.scalars(select(ImportRule)))
+    for entry in data.get("import_rules", []):
+        _require(entry, ("match_text", "account", "category"), "import rule")
+        cat = category_for(entry["category"], f"import rule {entry['match_text']!r}")
+        account_name = entry.get("account")
+        if account_name not in accounts:
+            raise ConfigError(f"import rule {entry['match_text']!r}: unknown account {account_name!r}")
+        rule = next(
+            (r for r in existing_rules if r.match_text == entry["match_text"] and r.category_id == cat.id), None
+        )
+        if rule is None:
+            rule = ImportRule(match_text=entry["match_text"], category_id=cat.id)
+            db.add(rule)
+            existing_rules.append(rule)
+        rule.account_id = accounts[account_name].id
+        rule.category_id = cat.id
+        rule.amount_cents = int(entry["amount_cents"]) if entry.get("amount_cents") is not None else None
+        rule.day_from = int(entry["day_from"]) if entry.get("day_from") is not None else None
+        rule.day_to = int(entry["day_to"]) if entry.get("day_to") is not None else None
+        rule.is_active = bool(entry.get("is_active", True))
+        counts["import_rules"] += 1
 
     for key, value in data.get("settings", {}).items():
         setting = db.get(AppSetting, key)

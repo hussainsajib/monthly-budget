@@ -1,6 +1,7 @@
 """Maintenance commands.
 
     python -m app.cli import-xlsx <workbook.xlsx>          load transactions from the old workbook
+    python -m app.cli clear-transactions [--imported-only] [--yes]  delete transaction rows (keeps setup)
     python -m app.cli export-config <file.json>            save categories/accounts/recurring/budgets/settings
     python -m app.cli import-config <file.json> [--replace]  load them into this database
 """
@@ -12,7 +13,10 @@ import json
 import sys
 from pathlib import Path
 
+from sqlalchemy import delete, func, select
+
 from app.db.session import get_sessionmaker
+from app.models import Transaction
 from app.services.config_io import ConfigError, export_config, import_config
 from app.services.xlsx_import import import_workbook
 
@@ -23,6 +27,10 @@ def main() -> None:
 
     imp = sub.add_parser("import-xlsx", help="Import the Transactions sheet from the old workbook")
     imp.add_argument("path", type=Path)
+
+    clr = sub.add_parser("clear-transactions", help="Delete transaction rows (setup is kept)")
+    clr.add_argument("--imported-only", action="store_true", help="Keep hand-entered rows; delete imported only")
+    clr.add_argument("--yes", action="store_true", help="Skip the confirmation prompt")
 
     exp = sub.add_parser("export-config", help="Write your setup (not transactions) to a JSON file")
     exp.add_argument("path", type=Path)
@@ -40,6 +48,27 @@ def main() -> None:
         with get_sessionmaker()() as db:
             created, skipped = import_workbook(db, args.path)
         print(f"Imported {created} transactions ({skipped} already present).")
+
+    elif args.command == "clear-transactions":
+        with get_sessionmaker()() as db:
+            count_stmt = select(func.count()).select_from(Transaction)
+            delete_stmt = delete(Transaction)
+            if args.imported_only:
+                count_stmt = count_stmt.where(Transaction.import_hash.is_not(None))
+                delete_stmt = delete_stmt.where(Transaction.import_hash.is_not(None))
+            count = db.scalar(count_stmt) or 0
+            label = "imported transactions" if args.imported_only else "transactions"
+            if count == 0:
+                print(f"No {label} to delete.")
+                return
+            if not args.yes:
+                answer = input(f"Delete {count} {label}? This cannot be undone. Type 'yes' to continue: ")
+                if answer.strip().lower() != "yes":
+                    print("Cancelled.")
+                    return
+            db.execute(delete_stmt)
+            db.commit()
+        print(f"Deleted {count} {label}.")
 
     elif args.command == "export-config":
         with get_sessionmaker()() as db:

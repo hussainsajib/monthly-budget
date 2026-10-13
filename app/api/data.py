@@ -15,11 +15,13 @@ from sqlalchemy.orm import Session
 
 from app.core.money import to_cents
 from app.db.session import get_db
-from app.models import Account, Category, RecurringTemplate, Transaction
+from app.models import REIMBURSEMENT, TRANSFER, Account, Category, ImportRule, RecurringTemplate, Transaction
 from app.schemas.transaction import TransactionInput
-from app.services import budgets, importing, reports
+from app.services import budgets, import_rules, importing, reports
 from app.services import categories as category_service
+from app.services import reimbursements as reimbursement_service
 from app.services import transactions as txn_service
+from app.services import transfers as transfer_service
 from app.services.account_config import account_type_keys, ensure_account_config, get_account_types
 from app.services.cashflow import build_ledger
 from app.services.categories import CategoryTree
@@ -82,7 +84,7 @@ class CategoryBody(BaseModel):
     is_active: bool = True
 
 
-def _category_rows(db: Session, tree: CategoryTree) -> list[dict]:
+def _category_rows(db: Session, tree: CategoryTree, include_system: bool = False) -> list[dict]:
     counts = dict(db.execute(select(Transaction.category_id, func.count()).group_by(Transaction.category_id)).all())
     recurring = dict(
         db.execute(select(RecurringTemplate.category_id, func.count()).group_by(RecurringTemplate.category_id)).all()
@@ -106,12 +108,18 @@ def _category_rows(db: Session, tree: CategoryTree) -> list[dict]:
             "recurring_count": recurring.get(n.id, 0),
         }
         for n in tree.walk()
+        # system categories are managed, not shown generally
+        if include_system or n.category.kind not in (TRANSFER, REIMBURSEMENT)
     ]
 
 
 @router.get("/categories")
-def list_categories(db: Session = Depends(get_db)):
-    return _category_rows(db, category_service.load_tree(db))
+def list_categories(db: Session = Depends(get_db), include_system: bool = False):
+    if include_system:
+        # Make sure the transfer and reimbursement categories exist so import can offer them.
+        transfer_service.ensure_transfer_category(db)
+        reimbursement_service.ensure_reimbursement_category(db)
+    return _category_rows(db, category_service.load_tree(db), include_system)
 
 
 @router.post("/categories", status_code=201)
@@ -198,7 +206,13 @@ def _account_stats(db: Session) -> dict[int, dict]:
         db.execute(
             select(
                 Transaction.account_id,
-                func.sum(case((Category.kind.in_(income), Transaction.amount_cents), else_=-Transaction.amount_cents)),
+                func.sum(
+                    case(
+                        (Category.kind == TRANSFER, Transaction.amount_cents),
+                        (Category.kind.in_(income), Transaction.amount_cents),
+                        else_=-Transaction.amount_cents,
+                    )
+                ),
             )
             .join(Category, Transaction.category_id == Category.id)
             .where(Transaction.account_id.is_not(None), Transaction.date <= today)
@@ -299,7 +313,7 @@ def _txn_input(body: TransactionBody) -> TransactionInput:
     )
 
 
-def _txn_out(t: Transaction, tree: CategoryTree) -> dict:
+def _txn_out(t: Transaction, tree: CategoryTree, peer: Transaction | None = None) -> dict:
     return {
         "id": t.id,
         "date": t.date.isoformat(),
@@ -311,8 +325,35 @@ def _txn_out(t: Transaction, tree: CategoryTree) -> dict:
         "account_name": t.account.name if t.account else None,
         "amount_cents": t.amount_cents,
         "notes": t.notes,
+        "recurring_template_id": t.recurring_template_id,
+        "recurring_description": t.recurring_template.description if t.recurring_template else None,
+        "transfer_id": t.transfer_id,
+        "transfer_account_id": peer.account_id if peer else None,
+        "transfer_account_name": peer.account.name if peer and peer.account else None,
+        "reimbursement_id": t.reimbursement_id,
+        "reimbursement_account_id": peer.account_id if peer else None,
+        "reimbursement_account_name": peer.account.name if peer and peer.account else None,
         "planned": t.date > date.today(),
     }
+
+
+def _peer_lookup(db: Session, txns: list[Transaction]) -> dict[int, Transaction]:
+    """Other leg of each transfer / reimbursement, keyed by transaction id, for the rows on this page."""
+    peers: dict[int, Transaction] = {}
+    for key_attr, legs_for in (
+        ("transfer_id", transfer_service.legs_for),
+        ("reimbursement_id", reimbursement_service.legs_for),
+    ):
+        ids = {getattr(t, key_attr) for t in txns if getattr(t, key_attr) is not None}
+        by_group: dict[str, dict[int, Transaction]] = {}
+        for leg in legs_for(db, ids):
+            by_group.setdefault(getattr(leg, key_attr), {})[leg.id] = leg
+        for t in txns:
+            gid = getattr(t, key_attr)
+            if gid is None:
+                continue
+            peers[t.id] = next((leg for leg_id, leg in by_group[gid].items() if leg_id != t.id), None)
+    return peers
 
 
 def _get_txn(db: Session, txn_id: int) -> Transaction:
@@ -346,8 +387,9 @@ def list_transactions(
     items, total = txn_service.list_transactions(
         db, flt, PAGE_SIZE, (page - 1) * PAGE_SIZE, sort=sort, desc=(dir != "asc")
     )
+    peers = _peer_lookup(db, items)
     return {
-        "items": [_txn_out(t, tree) for t in items],
+        "items": [_txn_out(t, tree, peers.get(t.id)) for t in items],
         "total": total,
         "page": page,
         "pages": max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1),
@@ -358,12 +400,37 @@ def list_transactions(
 @router.get("/transactions/recent")
 def recent_transactions(db: Session = Depends(get_db)):
     tree = category_service.load_tree(db)
-    return [_txn_out(t, tree) for t in txn_service.recent_transactions(db)]
+    items = txn_service.recent_transactions(db)
+    peers = _peer_lookup(db, items)
+    return [_txn_out(t, tree, peers.get(t.id)) for t in items]
 
 
 @router.get("/transactions/descriptions")
 def descriptions(db: Session = Depends(get_db)):
     return txn_service.recent_descriptions(db)
+
+
+@router.get("/transactions/duplicates")
+def transaction_duplicates(
+    date: date,
+    amount: str,
+    account_id: int | None = None,
+    exclude_id: int | None = None,
+    db: Session = Depends(get_db),
+):
+    """Existing rows matching (date, amount, account) so the form can warn before saving."""
+    with user_errors():
+        matches = txn_service.find_duplicates(db, date, to_cents(amount), account_id, exclude_id)
+    return [
+        {
+            "id": t.id,
+            "date": t.date.isoformat(),
+            "description": t.description,
+            "amount_cents": t.amount_cents,
+            "account_name": t.account.name if t.account else None,
+        }
+        for t in matches
+    ]
 
 
 @router.post("/transactions", status_code=201)
@@ -375,7 +442,9 @@ def create_transaction(body: TransactionBody, db: Session = Depends(get_db)):
 
 @router.get("/transactions/{txn_id}")
 def get_transaction(txn_id: int, db: Session = Depends(get_db)):
-    return _txn_out(_get_txn(db, txn_id), category_service.load_tree(db))
+    txn = _get_txn(db, txn_id)
+    peers = _peer_lookup(db, [txn])
+    return _txn_out(txn, category_service.load_tree(db), peers.get(txn.id))
 
 
 @router.put("/transactions/{txn_id}")
@@ -388,8 +457,99 @@ def update_transaction(txn_id: int, body: TransactionBody, db: Session = Depends
 
 @router.delete("/transactions/{txn_id}", status_code=204)
 def delete_transaction(txn_id: int, db: Session = Depends(get_db)):
-    txn_service.delete_transaction(db, _get_txn(db, txn_id))
+    txn = _get_txn(db, txn_id)
+    if txn.transfer_id is not None:
+        transfer_service.delete_transfer(db, txn.transfer_id)  # deleting one leg removes both
+    elif txn.reimbursement_id is not None:
+        reimbursement_service.un_pair(db, txn)  # delete the leg, release the other as a normal row
+    else:
+        txn_service.delete_transaction(db, txn)
     return Response(status_code=204)
+
+
+@router.delete("/transactions")
+def clear_transactions(imported_only: bool = False, db: Session = Depends(get_db)):
+    """Delete every transaction (or only imported ones). Setup — categories, accounts, budgets — is kept."""
+    with user_errors():
+        deleted = txn_service.clear_transactions(db, imported_only=imported_only)
+    return {"deleted": deleted}
+
+
+# ----------------------------------------------------------------- transfers
+
+
+class TransferBody(BaseModel):
+    date: date
+    description: str = ""
+    amount: str
+    from_account_id: int | None = None
+    to_account_id: int | None = None
+    notes: str | None = None
+
+
+class ConnectTransferBody(BaseModel):
+    from_id: int
+    to_id: int
+
+
+@router.post("/transfers", status_code=201)
+def create_transfer(body: TransferBody, db: Session = Depends(get_db)):
+    with user_errors():
+        transfer_id = transfer_service.create_transfer(
+            db,
+            on_date=body.date,
+            description=body.description,
+            amount_cents=to_cents(body.amount),
+            from_account_id=body.from_account_id,
+            to_account_id=body.to_account_id,
+            notes=body.notes,
+        )
+    return {"transfer_id": transfer_id}
+
+
+@router.post("/transfers/connect")
+def connect_transfer(body: ConnectTransferBody, db: Session = Depends(get_db)):
+    """Link two existing rows (e.g. the two statements' sides of one movement) as a transfer."""
+    first, second = _get_txn(db, body.from_id), _get_txn(db, body.to_id)
+    with user_errors():
+        transfer_id = transfer_service.connect_transfer(db, first, second)
+    return {"transfer_id": transfer_id}
+
+
+class ConnectReimbursementBody(BaseModel):
+    first_id: int
+    second_id: int
+
+
+@router.post("/reimbursements/connect")
+def connect_reimbursement(body: ConnectReimbursementBody, db: Session = Depends(get_db)):
+    """Link an outlay to its repayment so both stop counting toward your budget."""
+    first, second = _get_txn(db, body.first_id), _get_txn(db, body.second_id)
+    with user_errors():
+        reimbursement_id = reimbursement_service.connect(db, first, second)
+    return {"reimbursement_id": reimbursement_id}
+
+
+@router.get("/transfers/{transfer_id}")
+def get_transfer(transfer_id: str, db: Session = Depends(get_db)):
+    with user_errors():
+        return transfer_service.transfer_out(db, transfer_id)
+
+
+@router.put("/transfers/{transfer_id}")
+def update_transfer(transfer_id: str, body: TransferBody, db: Session = Depends(get_db)):
+    with user_errors():
+        transfer_service.update_transfer(
+            db,
+            transfer_id,
+            on_date=body.date,
+            description=body.description,
+            amount_cents=to_cents(body.amount),
+            from_account_id=body.from_account_id,
+            to_account_id=body.to_account_id,
+            notes=body.notes,
+        )
+    return {"ok": True}
 
 
 # ----------------------------------------------------------------- recurring
@@ -502,6 +662,7 @@ class ImportRow(BaseModel):
     direction: str
     category_id: int
     key: str
+    recurring_template_id: int | None = None
 
 
 class ImportCommitBody(BaseModel):
@@ -549,11 +710,126 @@ def import_commit(body: ImportCommitBody, db: Session = Depends(get_db)):
             raise HTTPException(400, f"Row {i} has an invalid direction")
     parsed = [
         importing.ParsedRow(
-            r.date, r.description, r.amount_cents, r.direction, category_id=r.category_id, key=r.key
+            r.date,
+            r.description,
+            r.amount_cents,
+            r.direction,
+            category_id=r.category_id,
+            key=r.key,
+            recurring_template_id=r.recurring_template_id,
         )
         for r in body.rows
     ]
     return {"imported": importing.commit_rows(db, parsed, body.account_id)}
+
+
+class ApplyRulesRow(BaseModel):
+    date: date
+    description: str
+    amount_cents: int
+    direction: str
+    category_id: int | None = None
+
+
+class ApplyRulesBody(BaseModel):
+    account_id: int | None = None
+    rows: list[ApplyRulesRow]
+
+
+@router.post("/import/apply-rules")
+def apply_import_rules(body: ApplyRulesBody, db: Session = Depends(get_db)):
+    """Fill categories a preview left blank from the current rules (used after adding a rule)."""
+    with user_errors():
+        parsed = [
+            importing.ParsedRow(r.date, r.description, r.amount_cents, r.direction, category_id=r.category_id)
+            for r in body.rows
+        ]
+        importing.apply_rules(db, parsed, body.account_id)
+    return {"category_ids": [r.category_id for r in parsed]}
+
+
+class ImportRuleBody(BaseModel):
+    match_text: str = ""
+    amount: str | None = None
+    account_id: int
+    day_from: int | None = None
+    day_to: int | None = None
+    category_id: int
+    sort_order: int = 0
+    is_active: bool = True
+
+
+def _rule_out(rule: ImportRule, tree: CategoryTree) -> dict:
+    return {
+        "id": rule.id,
+        "match_text": rule.match_text,
+        "amount_cents": rule.amount_cents,
+        "account_id": rule.account_id,
+        "account_name": rule.account.name if rule.account else None,
+        "day_from": rule.day_from,
+        "day_to": rule.day_to,
+        "category_id": rule.category_id,
+        "category_path": tree.path(rule.category_id),
+        "sort_order": rule.sort_order,
+        "is_active": rule.is_active,
+    }
+
+
+def _rule_amount_cents(body: ImportRuleBody) -> int | None:
+    return to_cents(body.amount) if body.amount else None
+
+
+@router.get("/import-rules")
+def list_import_rules(db: Session = Depends(get_db)):
+    tree = category_service.load_tree(db)
+    return [_rule_out(r, tree) for r in import_rules.list_rules(db)]
+
+
+@router.post("/import-rules", status_code=201)
+def create_import_rule(body: ImportRuleBody, db: Session = Depends(get_db)):
+    with user_errors():
+        rule = import_rules.create_rule(
+            db,
+            body.match_text,
+            body.account_id,
+            body.category_id,
+            body.day_from,
+            body.day_to,
+            _rule_amount_cents(body),
+        )
+    return {"id": rule.id}
+
+
+@router.put("/import-rules/{rule_id}")
+def update_import_rule(rule_id: int, body: ImportRuleBody, db: Session = Depends(get_db)):
+    with user_errors():
+        import_rules.update_rule(
+            db,
+            rule_id,
+            body.match_text,
+            body.account_id,
+            body.category_id,
+            body.day_from,
+            body.day_to,
+            body.sort_order,
+            body.is_active,
+            _rule_amount_cents(body),
+        )
+    return {"ok": True}
+
+
+@router.delete("/import-rules/{rule_id}", status_code=204)
+def delete_import_rule(rule_id: int, db: Session = Depends(get_db)):
+    with user_errors():
+        import_rules.delete_rule(db, rule_id)
+    return Response(status_code=204)
+
+
+@router.post("/import-rules/{rule_id}/move")
+def move_import_rule(rule_id: int, body: dict, db: Session = Depends(get_db)):
+    with user_errors():
+        import_rules.swap_order(db, rule_id, -1 if body.get("dir") == "up" else 1)
+    return {"ok": True}
 
 
 # ------------------------------------------------------------------- budgets
@@ -624,8 +900,8 @@ class GenerateBudgetBody(BaseModel):
 @router.post("/budget/{month}/generate")
 def generate_budget(month: str, body: GenerateBudgetBody, db: Session = Depends(get_db)):
     with user_errors():
-        budgets.generate(db, budgets.parse_month(month), body.values)
-    return {"ok": True}
+        changed = budgets.generate(db, budgets.parse_month(month), body.values)
+    return {"ok": True, "changed": changed}
 
 
 # ------------------------------------------------------------------- reports

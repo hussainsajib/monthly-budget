@@ -62,6 +62,14 @@ export interface Txn {
   account_name: string | null
   amount_cents: number
   notes: string | null
+  recurring_template_id: number | null
+  recurring_description: string | null
+  transfer_id: string | null
+  transfer_account_id: number | null
+  transfer_account_name: string | null
+  reimbursement_id: string | null
+  reimbursement_account_id: number | null
+  reimbursement_account_name: string | null
   planned: boolean
 }
 
@@ -79,6 +87,33 @@ export interface TxnBody {
   account_id: number | null
   amount: string
   notes: string
+}
+
+export interface DuplicateCandidate {
+  id: number
+  date: string
+  description: string
+  amount_cents: number
+  account_name: string | null
+}
+
+export interface Transfer {
+  transfer_id: string
+  date: string
+  description: string
+  amount_cents: number
+  from_account_id: number | null
+  to_account_id: number | null
+  notes: string | null
+}
+
+export interface TransferBody {
+  date: string
+  description: string
+  amount: string
+  from_account_id: number | null
+  to_account_id: number | null
+  notes: string | null
 }
 
 export type Schedule = {
@@ -132,6 +167,32 @@ export interface ImportPreviewRow {
   category_id: number | null
   duplicate: boolean
   key: string
+  recurring_template_id: number | null
+}
+
+export interface ImportRule {
+  id: number
+  match_text: string
+  amount_cents: number | null
+  account_id: number
+  account_name: string | null
+  day_from: number | null
+  day_to: number | null
+  category_id: number
+  category_path: string
+  sort_order: number
+  is_active: boolean
+}
+
+export interface ImportRuleBody {
+  match_text: string
+  amount: string | null
+  account_id: number
+  day_from: number | null
+  day_to: number | null
+  category_id: number
+  sort_order: number
+  is_active: boolean
 }
 
 export interface ReportRow {

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import Account, Category, Transaction
@@ -102,3 +102,40 @@ def update_transaction(db: Session, txn: Transaction, data: TransactionInput) ->
 def delete_transaction(db: Session, txn: Transaction) -> None:
     db.delete(txn)
     db.commit()
+
+
+def find_duplicates(
+    db: Session, on_date: date, amount_cents: int, account_id: int | None, exclude_id: int | None = None
+) -> list[Transaction]:
+    """Existing rows that look like the one being entered, on (date, amount, account).
+
+    Mirrors the heuristic used to flag "possible duplicate" rows on import, so a
+    hand-entered transaction matches whatever an earlier import would have flagged.
+    """
+    stmt = (
+        select(Transaction)
+        .where(
+            Transaction.date == on_date,
+            func.abs(Transaction.amount_cents) == abs(amount_cents),
+            Transaction.account_id == account_id,
+        )
+        .order_by(Transaction.id.desc())
+        .limit(5)
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(Transaction.id != exclude_id)
+    return list(db.scalars(stmt).unique())
+
+
+def clear_transactions(db: Session, imported_only: bool = False) -> int:
+    """Delete stored transactions; returns how many were removed.
+
+    Categories, accounts, budgets and recurring items are untouched. With ``imported_only``
+    only rows that carry an ``import_hash`` are removed, keeping hand-entered ones.
+    """
+    stmt = delete(Transaction)
+    if imported_only:
+        stmt = stmt.where(Transaction.import_hash.is_not(None))
+    result = db.execute(stmt)
+    db.commit()
+    return int(result.rowcount or 0)

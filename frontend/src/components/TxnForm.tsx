@@ -1,6 +1,8 @@
 import { useEffect, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { api } from '../api'
+import { formatMoney } from '../money'
 import { useAccounts, useCategories } from '../queries'
+import type { DuplicateCandidate } from '../types'
 import { AccountSelect, CategorySelect } from './selects'
 
 export interface TxnFormValues {
@@ -26,15 +28,18 @@ interface Props {
   submitDisabled?: boolean
   onDirtyChange?: (dirty: boolean) => void
   extra?: ReactNode
+  /** When set, looks for near-duplicates before saving and asks for confirmation. */
+  findDuplicates?: (values: TxnFormValues & { category_id: number }) => Promise<DuplicateCandidate[]>
 }
 
-export default function TxnForm({ initial, submitLabel, onSubmit, descriptions, big, plain, stacked, autoFocus, cascade, submitDisabled, onDirtyChange, extra }: Props) {
+export default function TxnForm({ initial, submitLabel, onSubmit, descriptions, big, plain, stacked, autoFocus, cascade, submitDisabled, onDirtyChange, extra, findDuplicates }: Props) {
   const categories = useCategories()
   const accounts = useAccounts()
   const [v, setV] = useState<TxnFormValues>(initial)
   const [busy, setBusy] = useState(false)
+  const [dups, setDups] = useState<DuplicateCandidate[] | null>(null)
   const dirty = (Object.keys(initial) as (keyof TxnFormValues)[]).some((k) => v[k] !== initial[k])
-  const canSubmit = v.category_id !== null && !busy && !(submitDisabled ?? false)
+  const canSubmit = v.category_id !== null && !busy && !(submitDisabled ?? false) && dups === null
   const hint = busy
     ? null
     : v.category_id === null
@@ -46,6 +51,10 @@ export default function TxnForm({ initial, submitLabel, onSubmit, descriptions, 
   useEffect(() => {
     onDirtyChange?.(dirty)
   }, [dirty, onDirtyChange])
+
+  useEffect(() => {
+    setDups(null)
+  }, [v])
 
   const set = <K extends keyof TxnFormValues>(key: K, value: TxnFormValues[K]) => setV((p) => ({ ...p, [key]: value }))
 
@@ -66,15 +75,38 @@ export default function TxnForm({ initial, submitLabel, onSubmit, descriptions, 
     )
   }
 
-  async function submit(e: FormEvent) {
-    e.preventDefault()
-    if (v.category_id === null || busy || submitDisabled) return
+  async function save() {
+    if (v.category_id === null) return
     setBusy(true)
     try {
       await onSubmit({ ...v, category_id: v.category_id })
     } finally {
       setBusy(false)
     }
+  }
+
+  async function submit(e: FormEvent) {
+    e.preventDefault()
+    if (v.category_id === null || busy || submitDisabled) return
+    if (dups !== null) {
+      await save()
+      return
+    }
+    if (findDuplicates) {
+      setBusy(true)
+      let found: DuplicateCandidate[] = []
+      try {
+        found = await findDuplicates({ ...v, category_id: v.category_id })
+      } catch {
+        found = []
+      }
+      setBusy(false)
+      if (found.length > 0) {
+        setDups(found)
+        return
+      }
+    }
+    await save()
   }
 
   function onFormKeyDown(e: KeyboardEvent<HTMLFormElement>) {
@@ -236,6 +268,29 @@ export default function TxnForm({ initial, submitLabel, onSubmit, descriptions, 
           Type a known description and the category, account and amount fill in automatically. Amounts like{' '}
           <code>61.09+1.37</code> work. Refunds: enter a negative amount.
         </p>
+      )}
+      {dups && (
+        <div className="flash warn">
+          <p className="small" style={{ margin: 0 }}>
+            This looks like a transaction you already entered:
+          </p>
+          <ul>
+            {dups.map((d) => (
+              <li key={d.id}>
+                {d.description} — {formatMoney(d.amount_cents)} on {d.date}
+                {d.account_name ? ` (${d.account_name})` : ''}
+              </li>
+            ))}
+          </ul>
+          <div className="row">
+            <button type="button" onClick={() => void save()}>
+              {submitLabel} anyway
+            </button>
+            <button type="button" className="secondary" onClick={() => setDups(null)}>
+              Cancel
+            </button>
+          </div>
+        </div>
       )}
       <div className="row form-actions">
         <button type="submit" disabled={!canSubmit}>

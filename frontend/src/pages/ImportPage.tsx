@@ -1,10 +1,14 @@
-import { useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { Filter } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
+import { Tooltip } from 'react-tooltip'
 import { api } from '../api'
 import { AccountSelect, CategoryFilter, CategorySelect } from '../components/selects'
+import { AddImportRuleModal, type RuleDraft } from '../components/ImportRuleDialog'
 import { NO_FILTERS, isFiltered, makeRowMatcher, type ImportFilters } from '../importFilter'
-import { formatMoney } from '../money'
-import { useAccounts, useCategories } from '../queries'
+import { centsToInput, formatMoney } from '../money'
+import { useAccounts, useImportCategories } from '../queries'
 import type { ImportPreviewRow } from '../types'
 import { useRun, useToast } from '../toast'
 
@@ -12,12 +16,21 @@ interface Row extends ImportPreviewRow {
   include: boolean
 }
 
+const SESSION_KEY = 'import-session'
+
+interface SavedSession {
+  account_id: number | null
+  amount_sign: string
+  rows: Row[]
+}
+
 export default function ImportPage() {
   const run = useRun()
   const { fail } = useToast()
   const navigate = useNavigate()
-  const categories = useCategories()
+  const categories = useImportCategories()
   const accounts = useAccounts()
+  const recurring = useQuery({ queryKey: ['recurring-all'], queryFn: () => api.recurring() })
   const fileRef = useRef<HTMLInputElement>(null)
   const [accountId, setAccountId] = useState<number | null>(null)
   const [amountSign, setAmountSign] = useState('positive_is_expense')
@@ -26,6 +39,71 @@ export default function ImportPage() {
   const [filters, setFilters] = useState<ImportFilters>(NO_FILTERS)
   const [bulkCategory, setBulkCategory] = useState<number | null>(null)
   const [onlyUnassigned, setOnlyUnassigned] = useState(true)
+  const [ruleDraft, setRuleDraft] = useState<RuleDraft | null>(null)
+  const restoredRef = useRef(false)
+
+  /** Fill blank categories from the current rules/history; manual picks are left untouched. */
+  async function reapplyRules(acc: number | null, currentRows: Row[]): Promise<Row[] | null> {
+    const payload = currentRows.map((r) => ({
+      date: r.date,
+      description: r.description,
+      amount_cents: r.amount_cents,
+      direction: r.direction,
+      category_id: r.category_id,
+    }))
+    const res = await run(() => api.applyImportRules(acc, payload))
+    if (!res) return null
+    return currentRows.map((r, i) => ({ ...r, category_id: res.category_ids[i] ?? r.category_id }))
+  }
+
+  // Restore a saved import after a refresh, then re-run rules so newly created rules fill in blanks.
+  useEffect(() => {
+    if (restoredRef.current) return
+    restoredRef.current = true
+    const raw = localStorage.getItem(SESSION_KEY)
+    if (!raw) return
+    let session: SavedSession
+    try {
+      session = JSON.parse(raw)
+    } catch {
+      localStorage.removeItem(SESSION_KEY)
+      return
+    }
+    if (!session || !Array.isArray(session.rows) || session.rows.length === 0) {
+      localStorage.removeItem(SESSION_KEY)
+      return
+    }
+    setAccountId(session.account_id)
+    setAmountSign(session.amount_sign)
+    setRows(session.rows)
+    void reapplyRules(session.account_id, session.rows).then((updated) => updated && setRows(updated))
+  }, [])
+
+  // Persist the in-progress import so a refresh never loses the user's ticks and category picks.
+  useEffect(() => {
+    if (!rows) return
+    const session: SavedSession = { account_id: accountId, amount_sign: amountSign, rows }
+    localStorage.setItem(SESSION_KEY, JSON.stringify(session))
+  }, [rows, accountId, amountSign])
+
+  function cancelImport() {
+    localStorage.removeItem(SESSION_KEY)
+    setRows(null)
+    setAccountId(null)
+    setAmountSign('positive_is_expense')
+    setFilters(NO_FILTERS)
+    setBulkCategory(null)
+  }
+
+  const draftFromRow = (r: Row): RuleDraft => ({
+    match_text: r.description.slice(0, 256),
+    amount: centsToInput(r.amount_cents),
+    account_id: accountId,
+    day_from: Number(r.date.slice(8, 10)),
+    day_to: null,
+    category_id: r.category_id,
+    is_active: true,
+  })
 
   async function preview(e: FormEvent) {
     e.preventDefault()
@@ -61,33 +139,60 @@ export default function ImportPage() {
     )
   }
 
-  async function commit() {
-    if (!rows || busy) return
-    const chosen = rows.map((r, i) => ({ r, i })).filter(({ r }) => r.include)
-    const missing = chosen.filter(({ r }) => r.category_id === null)
-    if (missing.length > 0) {
-      jumpToFirstFix()
-      return fail(`${missing.length} ticked row(s) still need a category. They are highlighted; nothing was imported.`)
-    }
-    if (chosen.length === 0) return fail('Tick at least one row to import')
+  async function doImport(rowsToImport: Row[]) {
     setBusy(true)
     const done = await run(
       () =>
         api.importCommit(
           accountId,
-          chosen.map(({ r }) => ({
+          rowsToImport.map((r) => ({
             date: r.date,
             description: r.description,
             amount_cents: r.amount_cents,
             direction: r.direction,
             category_id: r.category_id,
             key: r.key,
+            recurring_template_id: r.recurring_template_id,
           })),
         ),
       (r) => `Imported ${r.imported} transaction(s)`,
     )
     setBusy(false)
-    if (done) navigate('/transactions')
+    if (done) {
+      localStorage.removeItem(SESSION_KEY)
+      navigate('/transactions')
+    }
+  }
+
+  async function commit() {
+    if (!rows || busy) return
+    const chosen = rows.filter((r) => r.include)
+    const missing = chosen.filter((r) => r.category_id === null)
+    if (missing.length > 0) {
+      jumpToFirstFix()
+      return fail(`${missing.length} ticked row(s) still need a category. They are highlighted; nothing was imported.`)
+    }
+    if (chosen.length === 0) return fail('Tick at least one row to import')
+    await doImport(chosen)
+  }
+
+  /** Import exactly what the current filters are showing, ignoring the per-row include ticks. */
+  async function commitFiltered() {
+    if (!rows || busy) return
+    const shown = rows.filter(makeRowMatcher(filters, categories.data ?? []))
+    if (shown.length === 0) return fail('No rows match these filters')
+    const missing = shown.filter((r) => r.category_id === null)
+    if (missing.length > 0) {
+      jumpToFirstFix()
+      return fail(`${missing.length} of the shown row(s) still need a category; nothing was imported.`)
+    }
+    await doImport(shown)
+  }
+
+  async function applyRulesToPreview() {
+    if (!rows) return
+    const updated = await reapplyRules(accountId, rows)
+    if (updated) setRows(updated)
   }
 
   if (rows) {
@@ -111,9 +216,16 @@ export default function ImportPage() {
 
     return (
       <>
-        <h1>
-          Review import <span className="chip">{rows.length} rows</span>
-        </h1>
+        <div className="row" style={{ alignItems: 'center' }}>
+          <h1 style={{ margin: 0 }}>
+            Review import <span className="chip">{rows.length} rows</span>
+          </h1>
+          <span className="row-actions">
+            <button className="secondary" type="button" onClick={cancelImport}>
+              Cancel
+            </button>
+          </span>
+        </div>
         {toFix > 0 && (
           <div className="flash err row" style={{ alignItems: 'center' }}>
             <span>
@@ -278,9 +390,13 @@ export default function ImportPage() {
                 </th>
                 <th>Date</th>
                 <th>Description</th>
+                <th>Recurring</th>
                 <th>Category</th>
                 <th className="num">Amount</th>
                 <th></th>
+                <th>
+                  <span className="sr-only">Create rule</span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -297,6 +413,20 @@ export default function ImportPage() {
                   <td>{r.date}</td>
                   <td>{r.description}</td>
                   <td>
+                    <select
+                      aria-label={`Recurring expense for ${r.description}`}
+                      value={r.recurring_template_id ?? ''}
+                      onChange={(e) => patch(i, { recurring_template_id: e.target.value ? Number(e.target.value) : null })}
+                    >
+                      <option value="">—</option>
+                      {recurring.data?.map((rc) => (
+                        <option key={rc.id} value={rc.id}>
+                          {rc.description}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>
                     <CategorySelect
                       categories={categories.data ?? []}
                       value={r.category_id}
@@ -309,11 +439,23 @@ export default function ImportPage() {
                     {formatMoney(r.amount_cents)}
                   </td>
                   <td>{r.duplicate && <span className="chip">possible duplicate</span>}</td>
+                  <td className="num">
+                    <button
+                      type="button"
+                      className="icon-btn ghost"
+                      aria-label={`Create an import rule from ${r.description}`}
+                      data-tooltip-id="import-tip"
+                      data-tooltip-content="Create an import rule from this row"
+                      onClick={() => setRuleDraft(draftFromRow(r))}
+                    >
+                      <Filter size={16} />
+                    </button>
+                  </td>
                 </tr>
               ))}
               {visible.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="muted">
+                  <td colSpan={7} className="muted">
                     No rows match these filters.
                   </td>
                 </tr>
@@ -322,13 +464,21 @@ export default function ImportPage() {
           </table>
         </div>
         <div className="row">
-          <button className="shrink" type="button" onClick={commit} disabled={busy}>
-            Import ticked rows ({rows.filter((r) => r.include).length})
+          <button className="shrink" type="button" onClick={commitFiltered} disabled={busy}>
+            Import the {visible.length} shown row(s)
           </button>
-          <button className="secondary shrink" type="button" onClick={() => setRows(null)}>
+          <button className="secondary shrink" type="button" onClick={commit} disabled={busy}>
+            Import {rows.filter((r) => r.include).length} ticked row(s)
+          </button>
+          <button className="secondary shrink" type="button" onClick={cancelImport}>
             Cancel
           </button>
         </div>
+
+        {ruleDraft && (
+          <AddImportRuleModal initial={ruleDraft} onClose={() => setRuleDraft(null)} onAdded={applyRulesToPreview} />
+        )}
+        <Tooltip id="import-tip" />
       </>
     )
   }

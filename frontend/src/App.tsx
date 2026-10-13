@@ -1,19 +1,21 @@
 import { Suspense, lazy } from 'react'
 import { NavLink, Navigate, Outlet, Route, Routes } from 'react-router-dom'
-import AccountsTab from './pages/AccountsTab'
-import CashflowPage from './pages/CashflowPage'
-import BudgetPage from './pages/BudgetPage'
-import CategoriesTab from './pages/CategoriesTab'
-import ImportPage from './pages/ImportPage'
-import PreferencesTab from './pages/PreferencesTab'
-import RecurringTab from './pages/RecurringTab'
-import SettingsLayout from './pages/SettingsLayout'
-import TransactionEditPage from './pages/TransactionEditPage'
-import TransactionsPage from './pages/TransactionsPage'
 import { Bar } from './components/table'
 
-// Recharts is heavy; load it only when the report is opened.
+// Each page is a separate chunk so the shell stays small and vendors are shared.
+const AccountsTab = lazy(() => import('./pages/AccountsTab'))
+const BudgetPage = lazy(() => import('./pages/BudgetPage'))
+const CashflowPage = lazy(() => import('./pages/CashflowPage'))
+const CategoriesTab = lazy(() => import('./pages/CategoriesTab'))
+const DangerTab = lazy(() => import('./pages/DangerTab'))
+const ImportPage = lazy(() => import('./pages/ImportPage'))
+const ImportRulesTab = lazy(() => import('./pages/ImportRulesTab'))
+const PreferencesTab = lazy(() => import('./pages/PreferencesTab'))
+const RecurringTab = lazy(() => import('./pages/RecurringTab'))
 const ReportsPage = lazy(() => import('./pages/ReportsPage'))
+const SettingsLayout = lazy(() => import('./pages/SettingsLayout'))
+const TransactionEditPage = lazy(() => import('./pages/TransactionEditPage'))
+const TransactionsPage = lazy(() => import('./pages/TransactionsPage'))
 
 const LINKS = [
   { to: '/transactions', label: 'Transactions' },
@@ -61,7 +63,9 @@ export default function App() {
           <Route path="categories" element={<CategoriesTab />} />
           <Route path="accounts" element={<AccountsTab />} />
           <Route path="recurring" element={<RecurringTab />} />
+          <Route path="import-rules" element={<ImportRulesTab />} />
           <Route path="preferences" element={<PreferencesTab />} />
+          <Route path="danger" element={<DangerTab />} />
         </Route>
         <Route path="*" element={<Navigate to="/transactions" replace />} />
       </Route>

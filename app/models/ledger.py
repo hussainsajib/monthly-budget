@@ -11,6 +11,8 @@ from app.db.base import Base
 
 EXPENSE = "expense"
 INCOME = "income"
+TRANSFER = "transfer"
+REIMBURSEMENT = "reimbursement"
 
 
 class Category(Base):
@@ -51,6 +53,11 @@ class Transaction(Base):
     ``amount_cents`` is signed relative to the category kind: a positive amount in an
     expense category is money out, in an income category money in; a negative amount
     is a refund / reversal of that.
+
+    A transfer between two accounts is stored as two rows sharing a ``transfer_id``: an
+    outgoing leg (negative ``amount_cents``, the source account) and an incoming leg
+    (positive, the destination). Transfer rows are neither income nor expense, so they are
+    excluded from budgets and reports; their amount is already the signed effect on the account.
     """
 
     __tablename__ = "transactions"
@@ -64,11 +71,26 @@ class Transaction(Base):
     notes: Mapped[str | None] = mapped_column(Text)
     # Set for imported rows so re-importing the same file is idempotent.
     import_hash: Mapped[str | None] = mapped_column(String(40), unique=True)
+    # Optional link to a recurring template, so an imported charge can be traced to its recurring expense.
+    recurring_template_id: Mapped[int | None] = mapped_column(ForeignKey("recurring_templates.id", ondelete="SET NULL"))
+    # Shared by the two legs of an account-to-account transfer (out of one account, into another).
+    transfer_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    # Shared by a reimbursable expense and its later repayment; both are excluded from budget/reports.
+    reimbursement_id: Mapped[str | None] = mapped_column(String(36), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     category: Mapped[Category] = relationship(lazy="joined")
     account: Mapped[Account | None] = relationship(lazy="joined")
+    recurring_template = relationship("RecurringTemplate")
 
     def cash_delta_cents(self, is_income: bool) -> int:
         """Effect on the owning account's balance; the caller resolves the category type's direction."""
+        if (
+            self.transfer_id is not None
+            or self.reimbursement_id is not None
+            or (self.category is not None and self.category.kind == TRANSFER)
+        ):
+            # Transfer legs (connected or a pending import) and paired reimbursements are already
+            # stored with the signed effect on the account.
+            return self.amount_cents
         return self.amount_cents if is_income else -self.amount_cents

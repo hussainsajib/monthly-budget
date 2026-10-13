@@ -35,6 +35,34 @@ class AppSetting(Base):
     value: Mapped[str] = mapped_column(String(200))
 
 
+class ImportRule(Base):
+    """Custom import rule: a match condition that auto-assigns a category.
+
+    A rule fires when a transaction's description contains ``match_text`` (empty = any; split on
+    ``|`` so any one of several phrases matches), its account equals ``account_id``, its amount
+    equals ``amount_cents`` (None = any) and its day of the month falls inside the optional
+    [day_from, day_to] window (1..31). A rule must carry at least one of description/amount/day so
+    it actually identifies something. Rules are consulted only when learned history has no
+    suggestion, in ``sort_order`` then id order; the first active rule that matches wins.
+    ``sort_order`` also drives the Settings UI ordering.
+    """
+
+    __tablename__ = "import_rules"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    match_text: Mapped[str] = mapped_column(String(256))
+    amount_cents: Mapped[int | None] = mapped_column(Integer)  # exact (absolute) amount match when set
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
+    day_from: Mapped[int | None] = mapped_column(Integer)  # day of month window (1..31), inclusive
+    day_to: Mapped[int | None] = mapped_column(Integer)
+    category_id: Mapped[int] = mapped_column(ForeignKey("categories.id", ondelete="CASCADE"))
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    account: Mapped[Account] = relationship(lazy="joined")
+    category: Mapped[Category] = relationship(lazy="joined")
+
+
 class MonthlyBudget(Base):
     """Budget for one leaf category in one month.
 

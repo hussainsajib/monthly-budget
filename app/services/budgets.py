@@ -12,7 +12,7 @@ from datetime import date
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from app.models import MonthlyBudget, RecurringTemplate, Transaction
+from app.models import TRANSFER, Category, MonthlyBudget, RecurringTemplate, Transaction
 from app.services.categories import CategoryError, Node, load_tree
 from app.services.category_config import income_keys
 from app.services.recurring import occurrences
@@ -79,7 +79,13 @@ def _overrides(db: Session, month: date) -> dict[int, int]:
 def _actuals(db: Session, month: date) -> dict[int, int]:
     stmt = (
         select(Transaction.category_id, func.sum(Transaction.amount_cents))
-        .where(Transaction.date >= month, Transaction.date < _next_month(month))
+        .where(
+            Transaction.date >= month,
+            Transaction.date < _next_month(month),
+            Transaction.transfer_id.is_(None),  # transfers are not spending
+            ~Transaction.category.has(Category.kind == TRANSFER),  # pending transfer legs neither
+            Transaction.reimbursement_id.is_(None),  # connected reimbursements are not spending
+        )
         .group_by(Transaction.category_id)
     )
     return {category_id: int(total) for category_id, total in db.execute(stmt)}
@@ -113,6 +119,17 @@ def effective_budgets(db: Session, month: date) -> dict[int, int]:
     }
 
 
+def _display_depth(node: Node) -> int:
+    """Depth ignoring the hidden "Transfer" system category, so its sub-categories read as top-level."""
+    depth = 0
+    parent = node.parent
+    while parent is not None:
+        if parent.category.kind != TRANSFER:
+            depth += 1
+        parent = parent.parent
+    return depth
+
+
 def build_month(db: Session, month: date) -> BudgetMonth:
     tree = load_tree(db)
     overrides = _overrides(db, month)
@@ -135,12 +152,12 @@ def build_month(db: Session, month: date) -> BudgetMonth:
             actual = actuals.get(node.id, 0)
             recurring = recurring_amt.get(node.id, 0)
         cat = node.category
-        if cat.is_active or budget or actual:
+        if cat.kind != TRANSFER and (cat.is_active or budget or actual):
             lines[slot] = BudgetLine(
                 node.id,
                 node.name,
                 cat.parent_id,
-                node.depth,
+                _display_depth(node),
                 cat.kind,
                 bool(node.children),
                 cat.is_active,

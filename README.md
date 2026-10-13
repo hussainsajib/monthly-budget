@@ -34,6 +34,38 @@ the UI for you.
 Run the checks with `pytest` and `ruff check .` (and `npm run typecheck` in `frontend/`). Without activating the
 venv, prefix commands with `.\.venv\Scripts\python -m` (e.g. `.\.venv\Scripts\python -m pytest`).
 
+## Running on another machine
+
+Copy the project folder to the new PC. You only need **Python 3** and **Node.js** installed there; SQLite is
+built in. You can skip the rebuildable dirs to keep the copy light — they regenerate on the new machine:
+
+- Skip: `.venv`, `frontend/node_modules`, `frontend/dist`, `.pytest_cache`, `.ruff_cache`.
+- Keep if you want your existing data: `data/budget.db` (migrations create the schema, but the DB holds all your
+  transactions and settings). Without it you start fresh.
+- Keep if you want a settings fallback: `personal/` (your `config.json` backup).
+- Keep `frontend/package-lock.json` so `npm install` reproduces the exact UI deps.
+
+Then run the same steps as "Run locally" above:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements-dev.txt
+
+alembic upgrade head                        # builds/migrates data\budget.db
+python -m app.cli import-config samples\starter-config.json   # skip only if you brought budget.db
+
+cd frontend
+npm install
+npm run build
+cd ..
+
+uvicorn app.main:app --reload                # http://127.0.0.1:8000
+```
+
+If you copied an existing `data/budget.db`, run `alembic upgrade head` to bring it up to the latest migration,
+then skip `import-config` (it would only merge/starter data into your real one).
+
 ## Your own setup (kept out of git)
 
 Migrations only create the schema: they contain no data. A new database starts empty, and you load a setup

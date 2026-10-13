@@ -1,7 +1,7 @@
 from datetime import date
 
-from app.models import Account, Transaction
-from app.services import cashflow, importing, reports, suggestions
+from app.models import Account, ImportRule, Transaction
+from app.services import cashflow, import_rules, importing, reports, suggestions
 from app.services import categories as category_service
 
 
@@ -86,6 +86,26 @@ def test_recurring_lands_in_separate_budget_slot(db):
     assert rent.budget_cents == rent.default_cents  # recurring is shown separately, not folded into budget
     assert rent.actual_cents == 0
     assert db.query(Transaction).filter(Transaction.date.between(date(2026, 2, 1), date(2026, 2, 28))).count() == 0
+
+
+def test_import_rule_matches_any_pipe_phrase(db, ids):
+    cats, accs = ids
+    rule = ImportRule(
+        match_text="NETFLIX | SPOTIFY | Disney+",
+        account_id=accs["Credit Card"],
+        category_id=cats["Grocery"],
+    )
+    db.add(rule)
+    db.commit()
+    try:
+        rules = [rule]
+        assert import_rules.match(rules, "SPOTIFY AB123", accs["Credit Card"], date(2026, 5, 3)) == cats["Grocery"]
+        assert import_rules.match(rules, "Disney+ monthly", accs["Credit Card"], date(2026, 5, 3)) == cats["Grocery"]
+        assert import_rules.match(rules, "Amazon Prime", accs["Credit Card"], date(2026, 5, 3)) is None
+        assert import_rules.match(rules, "NETFLIX", accs["Chequing"], date(2026, 5, 3)) is None  # wrong account
+    finally:
+        db.delete(rule)
+        db.commit()
 
 
 def test_suggestions_exact_and_noisy_match(db, ids):

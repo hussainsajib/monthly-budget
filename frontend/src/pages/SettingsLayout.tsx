@@ -1,4 +1,5 @@
-import { Repeat, SlidersHorizontal, Tags, Wallet } from 'lucide-react'
+import { Suspense } from 'react'
+import { AlertTriangle, Filter, Repeat, SlidersHorizontal, Tags, Wallet } from 'lucide-react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { Tooltip } from 'react-tooltip'
 
@@ -6,7 +7,9 @@ const TABS = [
   { to: 'categories', label: 'Categories', icon: Tags },
   { to: 'accounts', label: 'Accounts', icon: Wallet },
   { to: 'recurring', label: 'Recurring', icon: Repeat },
+  { to: 'import-rules', label: 'Import rules', icon: Filter },
   { to: 'preferences', label: 'Preferences', icon: SlidersHorizontal },
+  { to: 'danger', label: 'Danger', icon: AlertTriangle },
 ]
 
 export default function SettingsLayout() {
@@ -20,7 +23,9 @@ export default function SettingsLayout() {
           </NavLink>
         ))}
       </div>
-      <Outlet />
+      <Suspense fallback={null}>
+        <Outlet />
+      </Suspense>
       <Tooltip id="settings-tip" />
     </>
   )
