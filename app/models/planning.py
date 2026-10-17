@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
-from sqlalchemy import JSON, Boolean, Date, ForeignKey, Integer, String
+from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
-from app.models.ledger import Account, Category
+from app.models.ledger import Account, Category, Transaction
 
 
 class RecurringTemplate(Base):
@@ -61,6 +61,65 @@ class ImportRule(Base):
 
     account: Mapped[Account] = relationship(lazy="joined")
     category: Mapped[Category] = relationship(lazy="joined")
+
+
+class Plan(Base):
+    """A hypothetical future projection derived from real data.
+
+    Plans never write to the ledger. ``type`` selects a behaviour (see ``app.services.plan_types``)
+    and ``config`` carries that type's parameters. Account-aware types point at an ``account_id``
+    whose projected balance they track.
+    """
+
+    __tablename__ = "plans"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(80))
+    type: Mapped[str] = mapped_column(String(20))
+    status: Mapped[str] = mapped_column(String(10), default="active")  # active | archived | done
+    config: Mapped[dict | None] = mapped_column(JSON)
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"))
+    start_date: Mapped[date | None] = mapped_column(Date)
+    end_date: Mapped[date | None] = mapped_column(Date)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    account: Mapped[Account | None] = relationship(lazy="joined")
+    items: Mapped[list[PlanItem]] = relationship(
+        back_populates="plan", cascade="all, delete-orphan", order_by="PlanItem.sort_order, PlanItem.id"
+    )
+
+
+class PlanItem(Base):
+    """A user's manual adjustment layered on top of a plan's derived projection.
+
+    ``amount_cents`` is a positive magnitude; ``direction`` says which way it moves. An item may
+    link a ``category_id`` (so it can be matched to a real transaction for drift) or be freeform.
+    """
+
+    __tablename__ = "plan_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("plans.id", ondelete="CASCADE"), index=True)
+    date: Mapped[date | None] = mapped_column(Date, index=True)
+    description: Mapped[str] = mapped_column(String(200), default="")
+    category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id", ondelete="SET NULL"))
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"))
+    amount_cents: Mapped[int] = mapped_column(Integer, default=0)
+    direction: Mapped[str] = mapped_column(String(3), default="out")  # in | out
+    item_kind: Mapped[str] = mapped_column(String(20), default="custom")
+    source: Mapped[str] = mapped_column(String(10), default="manual")  # manual | recurring | future_txn
+    ref_id: Mapped[int | None] = mapped_column(Integer)
+    matched_transaction_id: Mapped[int | None] = mapped_column(
+        ForeignKey("transactions.id", ondelete="SET NULL")
+    )
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+    plan: Mapped[Plan] = relationship(back_populates="items")
+    category: Mapped[Category | None] = relationship(lazy="joined")
+    account: Mapped[Account | None] = relationship(lazy="joined")
+    matched_transaction: Mapped[Transaction | None] = relationship(lazy="joined")
 
 
 class MonthlyBudget(Base):

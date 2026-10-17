@@ -26,7 +26,23 @@ SETUP = {
     ],
     "accounts": [
         {"name": "Main", "kind": "bank", "opening_balance_cents": 5000, "opening_date": "2026-01-01"},
-        {"name": "Card", "kind": "credit", "is_active": False},
+        {
+            "name": "Card",
+            "kind": "debt",
+            "is_active": False,
+            "loan": {
+                "loan_type": "credit_card",
+                "lender": "Bank",
+                "original_principal_cents": 0,
+                "rate_bps": 1999,
+                "is_interest_bearing": True,
+                "min_payment_cents": 2500,
+                "due_day": 15,
+                "credit_limit_cents": 500000,
+                "reference": "ends 4242",
+                "notes": "",
+            },
+        },
     ],
     "recurring": [
         {

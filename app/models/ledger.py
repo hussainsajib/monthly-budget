@@ -41,10 +41,13 @@ class Account(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(60), unique=True)
-    kind: Mapped[str] = mapped_column(String(10), default="bank")  # bank | credit | cash
+    kind: Mapped[str] = mapped_column(String(10), default="bank")  # bank | cash | savings | investment | debt
     opening_balance_cents: Mapped[int] = mapped_column(Integer, default=0)
     opening_date: Mapped[date | None] = mapped_column(Date)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Present only for loan accounts (kind == "debt"); doubles as the "is a loan" marker.
+    loan = relationship("LoanDetails", back_populates="account", uselist=False, cascade="all, delete-orphan")
 
 
 class Transaction(Base):

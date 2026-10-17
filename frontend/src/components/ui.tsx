@@ -37,7 +37,15 @@ export function useViewMode(scope: string) {
 }
 
 /** Icon-only list/card switch. Both buttons carry a label and tooltip since they show no text. */
-export function ViewToggle({ view, onChange }: { view: ViewMode; onChange: (v: ViewMode) => void }) {
+export function ViewToggle({
+  view,
+  onChange,
+  tooltipId = 'settings-tip',
+}: {
+  view: ViewMode
+  onChange: (v: ViewMode) => void
+  tooltipId?: string
+}) {
   return (
     <div className="view-toggle" role="group" aria-label="View mode">
       <button
@@ -45,7 +53,7 @@ export function ViewToggle({ view, onChange }: { view: ViewMode; onChange: (v: V
         className={view === 'list' ? 'on' : ''}
         aria-pressed={view === 'list'}
         aria-label="View as list"
-        data-tooltip-id="settings-tip"
+        data-tooltip-id={tooltipId}
         data-tooltip-content="List view"
         onClick={() => onChange('list')}
       >
@@ -56,7 +64,7 @@ export function ViewToggle({ view, onChange }: { view: ViewMode; onChange: (v: V
         className={view === 'card' ? 'on' : ''}
         aria-pressed={view === 'card'}
         aria-label="View as cards"
-        data-tooltip-id="settings-tip"
+        data-tooltip-id={tooltipId}
         data-tooltip-content="Card view"
         onClick={() => onChange('card')}
       >

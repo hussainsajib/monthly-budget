@@ -9,6 +9,16 @@ import type {
   ImportPreviewRow,
   ImportRule,
   ImportRuleBody,
+  LoanCreateBody,
+  LoanDetail,
+  LoanPaymentBody,
+  LoanTypeConfig,
+  LoanUpdateBody,
+  LoansResponse,
+  Plan,
+  PlanBody,
+  PlanItemBody,
+  PlanType,
   Recurring,
   RecurringBody,
   Report,
@@ -137,6 +147,17 @@ export const api = {
   generateBudget: (month: string, values: Record<number, number>) =>
     post<{ ok: boolean; changed: number }>(`/budget/${month}/generate`, { values }),
 
+  planTypes: () => get<PlanType[]>('/plan-types'),
+  plans: () => get<Plan[]>('/plans'),
+  plan: (id: number) => get<Plan>(`/plans/${id}`),
+  createPlan: (b: PlanBody) => post<{ id: number }>('/plans', b),
+  updatePlan: (id: number, b: PlanBody) => put<{ id: number }>(`/plans/${id}`, b),
+  deletePlan: (id: number) => del(`/plans/${id}`),
+  createPlanItem: (planId: number, b: PlanItemBody) => post<{ id: number }>(`/plans/${planId}/items`, b),
+  updatePlanItem: (planId: number, itemId: number, b: PlanItemBody) =>
+    put<{ ok: boolean }>(`/plans/${planId}/items/${itemId}`, b),
+  deletePlanItem: (planId: number, itemId: number) => del(`/plans/${planId}/items/${itemId}`),
+
   report: (month: number | null) => get<Report>(`/reports${qs({ month })}`),
   cashflow: (accountId: number | null) => get<Cashflow>(`/cashflow${qs({ account_id: accountId })}`),
   setThresholds: (low: string, warn: string) =>
@@ -144,4 +165,15 @@ export const api = {
   categoryConfig: () => get<CategoryConfig>('/settings/category-config'),
   setLevels: (levels: string[]) => put<{ levels: string[] }>('/settings/category-config', { levels }),
   accountConfig: () => get<AccountConfig>('/settings/account-config'),
+
+  loans: (params: Record<string, string | number | null | undefined> = {}) =>
+    get<LoansResponse>(`/loans${qs(params)}`),
+  loan: (id: number) => get<LoanDetail>(`/loans/${id}`),
+  createLoan: (b: LoanCreateBody) => post<{ account_id: number }>('/loans', b),
+  updateLoan: (id: number, b: LoanUpdateBody) => put<{ account_id: number }>(`/loans/${id}`, b),
+  deleteLoan: (id: number) => del(`/loans/${id}`),
+  loanPayment: (id: number, b: LoanPaymentBody) => post<{ transfer_id: string }>(`/loans/${id}/payments`, b),
+  loanTypes: () => get<LoanTypeConfig>('/settings/loan-types'),
+  setLoanTypes: (types: { key: string; label: string }[]) =>
+    put<LoanTypeConfig>('/settings/loan-types', { types }),
 }

@@ -11,6 +11,12 @@ export const useCategoryConfig = () => useQuery({ queryKey: ['category-config'],
 export const useAccountConfig = () => useQuery({ queryKey: ['account-config'], queryFn: api.accountConfig })
 export const useImportRules = () => useQuery({ queryKey: ['import-rules'], queryFn: api.importRules })
 
+export const useRecurring = () => useQuery({ queryKey: ['recurring', 'all'], queryFn: () => api.recurring() })
+export const usePlanTypes = () => useQuery({ queryKey: ['plan-types'], queryFn: api.planTypes })
+export const usePlans = () => useQuery({ queryKey: ['plans'], queryFn: api.plans })
+export const usePlan = (id: number) =>
+  useQuery({ queryKey: ['plan', id], queryFn: () => api.plan(id), enabled: id > 0 })
+
 /** Server-sorted variant for the accounts table; pickers keep using the shared `useAccounts` entry. */
 export const useSortedAccounts = (sort: string, dir: string) =>
   useQuery({ queryKey: ['accounts', 'sorted', sort, dir], queryFn: () => api.accounts({ sort, dir }) })
@@ -18,3 +24,10 @@ export const useSortedAccounts = (sort: string, dir: string) =>
 /** Server-sorted variant for the recurring table. */
 export const useSortedRecurring = (sort: string, dir: string) =>
   useQuery({ queryKey: ['recurring', sort, dir], queryFn: () => api.recurring({ sort, dir }) })
+
+/** Server-sorted loans table plus its totals, debt trend and accounts still missing loan details. */
+export const useLoans = (sort: string, dir: string, months = 12) =>
+  useQuery({ queryKey: ['loans', sort, dir, months], queryFn: () => api.loans({ sort, dir, months }) })
+export const useLoan = (id: number) =>
+  useQuery({ queryKey: ['loan', id], queryFn: () => api.loan(id), enabled: id > 0 })
+export const useLoanTypes = () => useQuery({ queryKey: ['loan-types'], queryFn: api.loanTypes })

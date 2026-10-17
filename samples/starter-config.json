@@ -326,10 +326,22 @@
     },
     {
       "name": "Credit Card",
-      "kind": "credit",
+      "kind": "debt",
       "opening_balance_cents": 0,
       "opening_date": null,
-      "is_active": true
+      "is_active": true,
+      "loan": {
+        "loan_type": "credit_card",
+        "lender": "",
+        "original_principal_cents": 0,
+        "rate_bps": 0,
+        "is_interest_bearing": false,
+        "min_payment_cents": 0,
+        "due_day": 0,
+        "credit_limit_cents": 0,
+        "reference": "",
+        "notes": ""
+      }
     },
     {
       "name": "Savings",

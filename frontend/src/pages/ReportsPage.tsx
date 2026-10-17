@@ -1,14 +1,17 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import { Fragment, useState } from 'react'
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../api'
 import { Loading } from '../components/ui'
 import { formatMoney, monthLabel } from '../money'
+import type { ReportRow } from '../types'
 
 const dollars = (v: unknown) => formatMoney(Math.round(Number(v) * 100))
 
 export default function ReportsPage() {
   const [month, setMonth] = useState<number | null>(null) // null = last month with activity
+  const [collapsed, setCollapsed] = useState<Set<number> | null>(null)
   const report = useQuery({
     queryKey: ['report', month],
     queryFn: () => api.report(month),
@@ -19,6 +22,24 @@ export default function ReportsPage() {
   const withYear = r ? new Set(r.months.map((m) => m.slice(0, 4))).size > 1 : false
   const range = r ? `${monthLabel(r.months[0], true)} to ${monthLabel(r.months[r.months.length - 1], true)}` : ''
   const selected = r?.month ?? 1
+  const collapsedIds = collapsed ?? new Set((r?.rows ?? []).filter((row) => row.has_children).map((row) => row.category_id))
+
+  const toggle = (categoryId: number) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev ?? collapsedIds)
+      if (next.has(categoryId)) next.delete(categoryId)
+      else next.add(categoryId)
+      return next
+    })
+
+  const visibleRows: ReportRow[] = []
+  let hideDepth: number | null = null
+  for (const row of r?.rows ?? []) {
+    if (hideDepth !== null && row.depth > hideDepth) continue
+    hideDepth = null
+    visibleRows.push(row)
+    if (collapsedIds.has(row.category_id)) hideDepth = row.depth
+  }
 
   return (
     <>
@@ -127,19 +148,39 @@ export default function ReportsPage() {
                 </tr>
               </thead>
               <tbody>
-                {r.rows.map((row) => (
-                  <tr key={row.category_id} className={row.depth === 0 ? 'root' : ''}>
-                    <td style={{ paddingLeft: 10 + row.depth * 18 }}>{row.name}</td>
-                    {row.months.map((c, i) => (
-                      <Fragment key={i}>
-                        <td className="num muted">{formatMoney(row.budgets[i], true)}</td>
-                        <td className={`num ${tone(c, row.budgets[i], !row.is_income)}`}>
-                          {formatMoney(c, true)}
-                        </td>
-                      </Fragment>
-                    ))}
-                  </tr>
-                ))}
+                {visibleRows.map((row) => {
+                  const hidden = collapsedIds.has(row.category_id)
+                  return (
+                    <tr key={row.category_id} className={row.depth === 0 ? 'root' : ''}>
+                      <td>
+                        <span className={`row-label cat-d${row.depth}`}>
+                          {row.has_children ? (
+                            <button
+                              type="button"
+                              className="twist"
+                              aria-expanded={!hidden}
+                              aria-label={`${hidden ? 'Expand' : 'Collapse'} ${row.name}`}
+                              onClick={() => toggle(row.category_id)}
+                            >
+                              {hidden ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
+                            </button>
+                          ) : (
+                            <span className="twist-spacer" />
+                          )}
+                          <span className="nm">{row.name}</span>
+                        </span>
+                      </td>
+                      {row.months.map((c, i) => (
+                        <Fragment key={i}>
+                          <td className="num muted">{formatMoney(row.budgets[i], true)}</td>
+                          <td className={`num ${tone(c, row.budgets[i], !row.is_income)}`}>
+                            {formatMoney(c, true)}
+                          </td>
+                        </Fragment>
+                      ))}
+                    </tr>
+                  )
+                })}
                 <tr className="root">
                   <td>NET (income − expenses)</td>
                   {r.net_months.map((c, i) => (

@@ -145,6 +145,7 @@ def test_csv_import_flags_duplicates_and_is_idempotent(db, ids):
     assert importing.commit_rows(db, rows, acc) == 2
     again = importing.prepare_preview(db, importing.parse_csv(TD_CSV), acc)
     assert all(r.duplicate for r in again)  # same hashes -> flagged
+    assert importing.commit_rows(db, again, acc) == 0  # existing hashes are skipped, not re-inserted
     salary = db.query(Transaction).filter_by(description="PAYROLL").one()
     assert salary.amount_cents == 350000  # money in on an income category stays positive
 

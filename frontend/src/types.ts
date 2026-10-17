@@ -1,5 +1,5 @@
 export type Kind = string
-export type AccountKind = 'bank' | 'credit' | 'cash'
+export type AccountKind = 'bank' | 'cash' | 'savings' | 'investment' | 'debt'
 
 export interface CategoryType {
   key: string
@@ -46,6 +46,11 @@ export interface Account {
   opening_balance_cents: number
   opening_date: string | null
   current_balance_cents: number
+  /** True when kind === 'debt' (a loan). */
+  is_loan: boolean
+  /** Positive amount owed for a loan; equal to the balance for every other account. */
+  owed_cents: number
+  loan_type: string | null
   transaction_count: number
   transacted_cents: number
   is_active: boolean
@@ -134,6 +139,7 @@ export interface Recurring {
   description: string
   category_id: number
   category_path: string
+  is_income: boolean
   account_id: number | null
   account_name: string | null
   amount_cents: number
@@ -281,4 +287,285 @@ export interface BudgetMonth {
   unassigned: number
   type_totals: Record<string, { budget: number; actual: number }>
   lines: BudgetLine[]
+}
+
+export type PlanConfigKind = 'money' | 'int' | 'date' | 'text' | 'select' | 'category' | 'paycheck'
+
+export interface PlanConfigField {
+  key: string
+  label: string
+  kind: PlanConfigKind
+  placeholder: string
+  help: string
+  options: { key: string; label: string }[]
+}
+
+export interface PlanType {
+  key: string
+  label: string
+  description: string
+  account_aware: boolean
+  implemented: boolean
+  headline: string
+  item_kinds: string[]
+  config_fields: PlanConfigField[]
+}
+
+export interface PlanEvent {
+  item_id: number | null
+  date: string | null
+  description: string
+  category_id: number | null
+  category_path: string
+  account_id: number | null
+  amount_cents: number
+  direction: 'in' | 'out'
+  item_kind: string
+  source: string
+  ref_id: number | null
+  matched_transaction_id: number | null
+  matched_date: string | null
+  actual_cents: number | null
+  variance_cents: number | null
+  balance_cents?: number | null
+}
+
+export interface PlanDerived {
+  kind: string
+  note?: string
+  headline_cents?: number
+  headline_pct?: number
+  events: PlanEvent[]
+  window?: { start: string; end: string }
+  lookahead_paychecks?: number
+  paycheck?: { id: number; description: string; amount_cents: number } | null
+  paychecks?: { date: string }[]
+  opening_balance_cents?: number
+  inflow_cents?: number
+  outflow_cents?: number
+  net_cents?: number
+  buffer_cents?: number
+  safe_to_spend_cents?: number
+  end_balance_cents?: number
+  lowest_balance_cents?: number
+  target_cents?: number
+  funded_cents?: number
+  remaining_cents?: number
+  progress_pct?: number
+  target_date?: string | null
+  months_remaining?: number | null
+  required_monthly_cents?: number | null
+  monthly_payment_cents?: number
+  apr_pct?: number
+  strategy?: string
+  months_to_payoff?: number | null
+  total_interest_cents?: number
+  debts?: PlanDebt[]
+  schedule?: { month: number; remaining_cents: number }[]
+  budget_cents?: number
+  estimate_cents?: number
+  income_cents?: number
+  expense_cents?: number
+  month?: string
+  income_adjust_pct?: number
+  expense_adjust_pct?: number
+  base_income_cents?: number
+  base_expense_cents?: number
+  base_net_cents?: number
+  purchase_cents?: number
+  purchase_date?: string
+  account_name?: string | null
+  balance_before_cents?: number
+  balance_after_cents?: number
+  affordable?: boolean
+  shortfall_cents?: number
+}
+
+export interface PlanDebt {
+  id: number
+  name: string
+  initial_cents: number
+  interest_cents: number
+  payoff_month: number | null
+}
+
+export interface PlanItem {
+  id: number
+  date: string | null
+  description: string
+  category_id: number | null
+  category_path: string
+  account_id: number | null
+  account_name: string | null
+  amount_cents: number
+  direction: 'in' | 'out'
+  item_kind: string
+  source: string
+  matched_transaction_id: number | null
+  matched_date: string | null
+}
+
+export interface Plan {
+  id: number
+  name: string
+  type: string
+  type_label: string
+  status: string
+  account_id: number | null
+  account_name: string | null
+  start_date: string | null
+  end_date: string | null
+  notes: string
+  config: Record<string, unknown>
+  sort_order: number
+  derived: PlanDerived
+  item_count: number
+  items?: PlanItem[]
+  events?: PlanEvent[]
+}
+
+export interface PlanBody {
+  name: string
+  type: string
+  account_id: number | null
+  start_date: string | null
+  end_date: string | null
+  notes: string
+  status: string
+  config: Record<string, unknown>
+}
+
+export interface PlanItemBody {
+  date: string | null
+  description: string
+  category_id: number | null
+  account_id: number | null
+  amount: string
+  direction: 'in' | 'out'
+  item_kind: string
+  matched_transaction_id: number | null
+}
+
+export interface Loan {
+  account_id: number
+  name: string
+  kind: AccountKind
+  is_active: boolean
+  opening_balance_cents: number
+  opening_date: string | null
+  balance_cents: number
+  /** Positive amount owed, the inverse of the signed ledger balance. */
+  owed_cents: number
+  has_details: boolean
+  loan_type: string
+  loan_type_label: string
+  lender: string
+  original_principal_cents: number
+  principal_basis_cents: number
+  principal_paid_cents: number
+  payoff_pct: number
+  rate_bps: number
+  rate_pct: number
+  is_interest_bearing: boolean
+  min_payment_cents: number
+  due_day: number
+  next_due_date: string | null
+  credit_limit_cents: number
+  utilization_pct: number | null
+  reference: string
+  notes: string
+  transaction_count: number
+  last_activity: string | null
+}
+
+export interface LoanHistoryRow {
+  txn_id: number
+  date: string
+  description: string
+  delta_cents: number
+  owed_delta_cents: number
+  owed_cents: number
+  is_planned: boolean
+}
+
+export interface LoanDetail extends Loan {
+  history: LoanHistoryRow[]
+}
+
+export interface LoanTypeTotal {
+  key: string
+  label: string
+  owed_cents: number
+  count: number
+}
+
+export interface LoanTotals {
+  owed_cents: number
+  count: number
+  original_cents: number
+  principal_paid_cents: number
+  balance_cents: number
+  by_type: LoanTypeTotal[]
+}
+
+export interface LoanTrendPoint {
+  month: string
+  owed_cents: number
+}
+
+export interface MissingLoanDetails {
+  account_id: number
+  name: string
+}
+
+export interface LoansResponse {
+  items: Loan[]
+  totals: LoanTotals
+  trend: LoanTrendPoint[]
+  missing_details: MissingLoanDetails[]
+}
+
+export interface LoanTypeConfig {
+  types: AccountType[]
+}
+
+export interface LoanDetailsInput {
+  loan_type: string
+  lender: string
+  original_principal: string
+  rate: string
+  is_interest_bearing: boolean
+  min_payment: string
+  due_day: number
+  credit_limit: string
+  reference: string
+  notes: string
+}
+
+export interface LoanCreateBody {
+  name: string
+  owed: string
+  opening_date: string | null
+  is_active: boolean
+  details: LoanDetailsInput
+  disbursement_account_id: number | null
+  disbursement_amount: string
+  disbursement_date: string | null
+  disbursement_description: string
+}
+
+export interface LoanUpdateBody {
+  name: string
+  owed: string
+  opening_date: string | null
+  is_active: boolean
+  details: LoanDetailsInput
+}
+
+export interface LoanPaymentBody {
+  from_account_id: number | null
+  amount: string
+  date: string
+  description: string
+  notes: string | null
 }

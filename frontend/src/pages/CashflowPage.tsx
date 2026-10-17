@@ -15,6 +15,9 @@ export default function CashflowPage() {
   const flow = useQuery({ queryKey: ['cashflow', accountId], queryFn: () => api.cashflow(accountId) })
   const account = flow.data?.account ?? null
   const ledger = flow.data?.ledger ?? null
+  const isLoan = account?.is_loan ?? false
+  /** A loan reads as amount owed, the inverse of its signed ledger balance. */
+  const display = (cents: number) => (isLoan ? -cents : cents)
 
   const [low, setLow] = useState('')
   const [warn, setWarn] = useState('')
@@ -64,17 +67,19 @@ export default function CashflowPage() {
           )}
           <div className="card stat">
             <div>
-              <span className="muted small">Balance today</span>
-              <b>{formatMoney(ledger.current_balance_cents)}</b>
+              <span className="muted small">{isLoan ? 'Owed today' : 'Balance today'}</span>
+              <b>{formatMoney(display(ledger.current_balance_cents))}</b>
             </div>
             <div>
-              <span className="muted small">After planned items</span>
-              <b>{formatMoney(ledger.projected_balance_cents)}</b>
+              <span className="muted small">{isLoan ? 'Owed after planned' : 'After planned items'}</span>
+              <b>{formatMoney(display(ledger.projected_balance_cents))}</b>
             </div>
             {ledger.lowest && (
               <div>
-                <span className="muted small">Lowest point</span>
-                <b className={ledger.lowest.level ? 'over' : ''}>{formatMoney(ledger.lowest.balance_cents)}</b>
+                <span className="muted small">{isLoan ? 'Highest owed' : 'Lowest point'}</span>
+                <b className={!isLoan && ledger.lowest.level ? 'over' : ''}>
+                  {formatMoney(display(ledger.lowest.balance_cents))}
+                </b>
                 <span className="small muted">
                   {ledger.lowest.date} · {ledger.lowest.description}
                 </span>
@@ -82,23 +87,32 @@ export default function CashflowPage() {
             )}
           </div>
 
-          <form className="card row" onSubmit={saveThresholds}>
-            <div>
-              <label htmlFor="cf-low">Red below ($)</label>
-              <input id="cf-low" type="text" inputMode="decimal" value={low} onChange={(e) => setLow(e.target.value)} />
-            </div>
-            <div>
-              <label htmlFor="cf-warn">Orange below ($)</label>
-              <input id="cf-warn" type="text" inputMode="decimal" value={warn} onChange={(e) => setWarn(e.target.value)} />
-            </div>
-            <button className="secondary shrink" type="submit">
-              Save alert levels
-            </button>
-          </form>
+          {!isLoan && (
+            <form className="card row" onSubmit={saveThresholds}>
+              <div>
+                <label htmlFor="cf-low">Red below ($)</label>
+                <input id="cf-low" type="text" inputMode="decimal" value={low} onChange={(e) => setLow(e.target.value)} />
+              </div>
+              <div>
+                <label htmlFor="cf-warn">Orange below ($)</label>
+                <input id="cf-warn" type="text" inputMode="decimal" value={warn} onChange={(e) => setWarn(e.target.value)} />
+              </div>
+              <button className="secondary shrink" type="submit">
+                Save alert levels
+              </button>
+            </form>
+          )}
 
           <p className="small muted">
             Future-dated transactions (for example from <Link to="/settings/recurring">recurring items</Link>) show as
             planned.
+            {isLoan && (
+              <>
+                {' '}
+                Money borrowed on the loan reads as a charge; payments read as paid. See{' '}
+                <Link to={`/loans/${account.id}`}>the loan</Link> for its payoff details.
+              </>
+            )}
           </p>
           <div className="card table-wrap">
             <table>
@@ -106,14 +120,14 @@ export default function CashflowPage() {
                 <tr>
                   <th>Date</th>
                   <th>Description</th>
-                  <th className="num">In</th>
-                  <th className="num">Out</th>
-                  <th className="num">Balance</th>
+                  <th className="num">{isLoan ? 'Paid' : 'In'}</th>
+                  <th className="num">{isLoan ? 'Charged' : 'Out'}</th>
+                  <th className="num">{isLoan ? 'Owed' : 'Balance'}</th>
                 </tr>
               </thead>
               <tbody>
                 {ledger.rows.map((r) => (
-                  <tr key={r.txn_id} className={`${r.level} ${r.is_planned ? 'planned' : ''}`}>
+                  <tr key={r.txn_id} className={`${isLoan ? '' : r.level} ${r.is_planned ? 'planned' : ''}`}>
                     <td>{r.date}</td>
                     <td>
                       <Link to={`/transactions/${r.txn_id}`} state={{ from: '/cashflow' }}>
@@ -123,7 +137,7 @@ export default function CashflowPage() {
                     <td className="num">{r.delta_cents > 0 ? formatMoney(r.delta_cents) : ''}</td>
                     <td className="num">{r.delta_cents < 0 ? formatMoney(-r.delta_cents) : ''}</td>
                     <td className="num">
-                      <b>{formatMoney(r.balance_cents)}</b>
+                      <b>{formatMoney(display(r.balance_cents))}</b>
                     </td>
                   </tr>
                 ))}

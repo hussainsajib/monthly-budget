@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import date
@@ -9,7 +10,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from pydantic import BaseModel, ValidationError
-from sqlalchemy import case, func, select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -19,10 +20,13 @@ from app.models import REIMBURSEMENT, TRANSFER, Account, Category, ImportRule, R
 from app.schemas.transaction import TransactionInput
 from app.services import budgets, import_rules, importing, reports
 from app.services import categories as category_service
+from app.services import loans as loan_service
+from app.services import plans as plan_service
 from app.services import reimbursements as reimbursement_service
 from app.services import transactions as txn_service
 from app.services import transfers as transfer_service
 from app.services.account_config import account_type_keys, ensure_account_config, get_account_types
+from app.services.balances import balance_deltas, delta_expression
 from app.services.cashflow import build_ledger
 from app.services.categories import CategoryTree
 from app.services.category_config import (
@@ -32,6 +36,14 @@ from app.services.category_config import (
     income_keys,
     set_levels,
 )
+from app.services.loan_config import (
+    LoanType,
+    ensure_loan_config,
+    get_loan_types,
+    loan_type_keys,
+    set_loan_types,
+)
+from app.services.plan_types import type_payloads
 from app.services.recurring import list_templates, validate_schedule
 from app.services.reference import (
     LOW_BALANCE_KEY,
@@ -168,13 +180,18 @@ class AccountBody(BaseModel):
 
 def _account_out(a: Account, stats: dict | None = None) -> dict:
     stats = stats or {}
+    balance = a.opening_balance_cents + stats.get("delta", 0)
     return {
         "id": a.id,
         "name": a.name,
         "kind": a.kind,
         "opening_balance_cents": a.opening_balance_cents,
         "opening_date": a.opening_date.isoformat() if a.opening_date else None,
-        "current_balance_cents": a.opening_balance_cents + stats.get("delta", 0),
+        "current_balance_cents": balance,
+        # A loan keeps the signed ledger balance but is read as "amount owed", which is its inverse.
+        "is_loan": loan_service.is_loan(a),
+        "owed_cents": loan_service.owed_cents(a, balance) if loan_service.is_loan(a) else balance,
+        "loan_type": a.loan.loan_type if a.loan else None,
         "transaction_count": stats.get("count", 0),
         "transacted_cents": stats.get("abs", 0),
         "is_active": a.is_active,
@@ -207,11 +224,7 @@ def _account_stats(db: Session) -> dict[int, dict]:
             select(
                 Transaction.account_id,
                 func.sum(
-                    case(
-                        (Category.kind == TRANSFER, Transaction.amount_cents),
-                        (Category.kind.in_(income), Transaction.amount_cents),
-                        else_=-Transaction.amount_cents,
-                    )
+                    delta_expression(income)
                 ),
             )
             .join(Category, Transaction.category_id == Category.id)
@@ -240,9 +253,16 @@ def _apply_account(db: Session, acc: Account, body: AccountBody) -> None:
     if body.kind not in account_type_keys(db) or not body.name.strip():
         raise ValueError("Name and a valid type are required")
     acc.name, acc.kind = body.name.strip(), body.kind
-    acc.opening_balance_cents = to_cents(body.opening_balance or "0")
+    opening = to_cents(body.opening_balance or "0")
+    # A loan's opening balance is entered as the amount owed (positive), the inverse of its ledger sign.
+    acc.opening_balance_cents = -opening if loan_service.is_loan(acc) else opening
     acc.opening_date = body.opening_date
     acc.is_active = body.is_active
+    # Loan metadata is 1:1 with a debt account, so keep it in step with the type.
+    if loan_service.is_loan(acc):
+        loan_service.ensure_details(db, acc)
+    else:
+        loan_service.drop_details(db, acc)
 
 
 def _save_account(db: Session, acc: Account, body: AccountBody) -> dict:
@@ -288,6 +308,207 @@ def delete_account(account_id: int, db: Session = Depends(get_db)):
         db.delete(acc)  # transactions/recurring reference accounts with ON DELETE SET NULL
         db.commit()
     return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------- loans
+
+
+class LoanDetailsBody(BaseModel):
+    loan_type: str = ""
+    lender: str = ""
+    original_principal: str = "0"
+    rate: str = "0"  # annual percent, e.g. "6.49"
+    is_interest_bearing: bool = False
+    min_payment: str = "0"
+    due_day: int = 0
+    credit_limit: str = "0"
+    reference: str = ""
+    notes: str = ""
+
+
+class LoanCreateBody(BaseModel):
+    name: str
+    owed: str = "0"
+    opening_date: date | None = None
+    is_active: bool = True
+    details: LoanDetailsBody = LoanDetailsBody()
+    disbursement_account_id: int | None = None
+    disbursement_amount: str = "0"
+    disbursement_date: date | None = None
+    disbursement_description: str = ""
+
+
+class LoanUpdateBody(BaseModel):
+    name: str
+    owed: str = "0"
+    opening_date: date | None = None
+    is_active: bool = True
+    details: LoanDetailsBody = LoanDetailsBody()
+
+
+class LoanPaymentBody(BaseModel):
+    from_account_id: int | None = None
+    amount: str = "0"
+    date: date
+    description: str = ""
+    notes: str | None = None
+
+
+class LoanTypesBody(BaseModel):
+    types: list[dict]
+
+
+def _details_fields(db: Session, body: LoanDetailsBody) -> dict:
+    with user_errors():
+        if body.loan_type and body.loan_type not in loan_type_keys(db):
+            raise ValueError("Unknown loan type")
+        if body.due_day and not 1 <= body.due_day <= 31:
+            raise ValueError("Due day must be between 1 and 31")
+        return {
+            "loan_type": body.loan_type,
+            "lender": body.lender.strip()[:80],
+            "original_principal_cents": to_cents(body.original_principal or "0"),
+            # percent to basis points: "6.49" -> 649, which is the same scaling as cents.
+            "rate_bps": to_cents(body.rate or "0"),
+            "is_interest_bearing": body.is_interest_bearing,
+            "min_payment_cents": to_cents(body.min_payment or "0"),
+            "due_day": body.due_day,
+            "credit_limit_cents": to_cents(body.credit_limit or "0"),
+            "reference": body.reference.strip(),
+            "notes": body.notes.strip(),
+        }
+
+
+def _loan_or_404(db: Session, account_id: int) -> Account:
+    account = db.get(Account, account_id)
+    if account is None or not loan_service.is_loan(account):
+        raise HTTPException(404, "Loan not found")
+    return account
+
+
+@router.get("/loans")
+def get_loans(
+    sort: str = "owed", dir: str = "desc", months: int = 12, db: Session = Depends(get_db)
+):
+    if dir not in ("asc", "desc"):
+        raise HTTPException(400, "dir must be 'asc' or 'desc'")
+    ensure_loan_config(db)
+    with user_errors():
+        rows = loan_service.sort_loans(loan_service.loan_summaries(db), sort, dir == "desc")
+    return {
+        "items": rows,
+        "totals": loan_service.totals(rows),
+        "trend": loan_service.debt_trend(db, max(1, min(months, 60))),
+        "missing_details": loan_service.missing_details(db),
+    }
+
+
+@router.get("/loans/{account_id}")
+def get_loan(account_id: int, db: Session = Depends(get_db)):
+    ensure_loan_config(db)
+    account = _loan_or_404(db, account_id)
+    deltas = balance_deltas(db, {account.id})
+    row = loan_service.loan_out(
+        account,
+        account.opening_balance_cents + deltas.get(account.id, 0),
+        {t.key: t.label for t in get_loan_types(db)},
+    )
+    row["history"] = loan_service.history(db, account)
+    return row
+
+
+@router.post("/loans", status_code=201)
+def create_loan(body: LoanCreateBody, db: Session = Depends(get_db)):
+    ensure_loan_config(db)
+    with user_errors():
+        fields = _details_fields(db, body.details)
+        owed = to_cents(body.owed or "0")
+        if owed < 0:
+            raise ValueError("Amount owed cannot be negative")
+        disbursement = None
+        if body.disbursement_account_id is not None:
+            amount = to_cents(body.disbursement_amount or "0")
+            if amount > 0:
+                disbursement = {
+                    "to_account_id": body.disbursement_account_id,
+                    "amount_cents": amount,
+                    "date": body.disbursement_date,
+                    "description": body.disbursement_description,
+                }
+        account = loan_service.create_loan(
+            db,
+            name=body.name,
+            owed_cents_value=owed,
+            details_fields=fields,
+            opening_date=body.opening_date,
+            is_active=body.is_active,
+            disbursement=disbursement,
+        )
+    return {"account_id": account.id}
+
+
+@router.put("/loans/{account_id}")
+def update_loan(account_id: int, body: LoanUpdateBody, db: Session = Depends(get_db)):
+    account = _loan_or_404(db, account_id)
+    with user_errors():
+        fields = _details_fields(db, body.details)
+        owed = to_cents(body.owed or "0")
+        if owed < 0:
+            raise ValueError("Amount owed cannot be negative")
+        name = body.name.strip()
+        if not name:
+            raise ValueError("A loan needs a name")
+        account.name = name
+        account.opening_balance_cents = -owed
+        account.opening_date = body.opening_date
+        account.is_active = body.is_active
+        details = loan_service.ensure_details(db, account)
+        loan_service.apply_details(details, fields)
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            raise ValueError(f"'{name}' already exists") from exc
+    return {"account_id": account.id}
+
+
+@router.delete("/loans/{account_id}", status_code=204)
+def delete_loan(account_id: int, db: Session = Depends(get_db)):
+    account = db.get(Account, account_id)
+    if account is not None:
+        db.delete(account)  # loan_details cascades; transactions keep their history with account_id NULL
+        db.commit()
+    return Response(status_code=204)
+
+
+@router.post("/loans/{account_id}/payments", status_code=201)
+def record_loan_payment(account_id: int, body: LoanPaymentBody, db: Session = Depends(get_db)):
+    account = _loan_or_404(db, account_id)
+    with user_errors():
+        transfer_id = loan_service.record_payment(
+            db,
+            account,
+            from_account_id=body.from_account_id,
+            amount_cents=to_cents(body.amount or "0"),
+            on_date=body.date,
+            description=body.description,
+            notes=body.notes,
+        )
+    return {"transfer_id": transfer_id}
+
+
+@router.get("/settings/loan-types")
+def get_loan_type_config(db: Session = Depends(get_db)):
+    ensure_loan_config(db)
+    return {"types": [{"key": t.key, "label": t.label} for t in get_loan_types(db)]}
+
+
+@router.put("/settings/loan-types")
+def set_loan_type_config(body: LoanTypesBody, db: Session = Depends(get_db)):
+    with user_errors():
+        types = [LoanType(key=str(t.get("key", "")), label=str(t.get("label", ""))) for t in body.types]
+        saved = set_loan_types(db, types)
+    return {"types": [{"key": t.key, "label": t.label} for t in saved]}
 
 
 # -------------------------------------------------------------- transactions
@@ -565,12 +786,13 @@ class RecurringBody(BaseModel):
     is_active: bool = True
 
 
-def _recurring_out(t: RecurringTemplate, tree: CategoryTree) -> dict:
+def _recurring_out(t: RecurringTemplate, tree: CategoryTree, income: set[str]) -> dict:
     return {
         "id": t.id,
         "description": t.description,
         "category_id": t.category_id,
         "category_path": tree.path(t.category_id),
+        "is_income": bool(t.category and t.category.kind in income),
         "account_id": t.account_id,
         "account_name": t.account.name if t.account else None,
         "amount_cents": t.amount_cents,
@@ -616,7 +838,8 @@ def get_recurring(sort: str = "description", dir: str = "asc", db: Session = Dep
     if dir not in ("asc", "desc"):
         raise HTTPException(400, "dir must be 'asc' or 'desc'")
     tree = category_service.load_tree(db)
-    rows = [_recurring_out(t, tree) for t in list_templates(db)]
+    income = income_keys(db)
+    rows = [_recurring_out(t, tree, income) for t in list_templates(db)]
     return _sort_recurring(rows, sort, dir == "desc")
 
 
@@ -1031,3 +1254,128 @@ def set_category_config(body: CategoryConfigBody, db: Session = Depends(get_db))
 def get_account_config(db: Session = Depends(get_db)):
     ensure_account_config(db)
     return {"types": [{"key": t.key, "label": t.label} for t in get_account_types(db)]}
+
+
+# --------------------------------------------------------------------- plans
+
+
+class PlanBody(BaseModel):
+    name: str
+    type: str
+    account_id: int | None = None
+    start_date: date | None = None
+    end_date: date | None = None
+    notes: str = ""
+    status: str = "active"
+    config: dict = {}
+
+
+class PlanItemBody(BaseModel):
+    date: datetime.date | None = None
+    description: str = ""
+    category_id: int | None = None
+    account_id: int | None = None
+    amount: str = "0"
+    direction: str = "out"
+    item_kind: str = "custom"
+    matched_transaction_id: int | None = None
+
+
+@router.get("/plan-types")
+def get_plan_types():
+    """The registry of plan behaviours, so the UI can render create/edit forms generically."""
+    return type_payloads()
+
+
+@router.get("/plans")
+def list_plans(db: Session = Depends(get_db)):
+    return [plan_service.plan_out(db, p) for p in plan_service.list_plans(db)]
+
+
+@router.get("/plans/{plan_id}")
+def get_plan(plan_id: int, db: Session = Depends(get_db)):
+    with user_errors():
+        plan = plan_service.get_plan(db, plan_id)
+        return plan_service.plan_out(db, plan, detail=True)
+
+
+@router.post("/plans", status_code=201)
+def create_plan(body: PlanBody, db: Session = Depends(get_db)):
+    with user_errors():
+        plan = plan_service.create_plan(
+            db,
+            name=body.name,
+            type=body.type,
+            account_id=body.account_id,
+            start_date=body.start_date,
+            end_date=body.end_date,
+            notes=body.notes,
+            config=body.config,
+        )
+    return {"id": plan.id}
+
+
+@router.put("/plans/{plan_id}")
+def update_plan(plan_id: int, body: PlanBody, db: Session = Depends(get_db)):
+    with user_errors():
+        plan = plan_service.get_plan(db, plan_id)
+        plan_service.update_plan(
+            db,
+            plan,
+            name=body.name,
+            account_id=body.account_id,
+            start_date=body.start_date,
+            end_date=body.end_date,
+            notes=body.notes,
+            status=body.status,
+            config=body.config,
+        )
+    return {"id": plan.id}
+
+
+@router.delete("/plans/{plan_id}", status_code=204)
+def delete_plan(plan_id: int, db: Session = Depends(get_db)):
+    with user_errors():
+        plan_service.delete_plan(db, plan_service.get_plan(db, plan_id))
+    return Response(status_code=204)
+
+
+def _item_fields(body: PlanItemBody) -> dict:
+    return {
+        "date": body.date,
+        "description": body.description,
+        "category_id": body.category_id,
+        "account_id": body.account_id,
+        "amount_cents": to_cents(body.amount or "0"),
+        "direction": body.direction,
+        "item_kind": body.item_kind,
+        "matched_transaction_id": body.matched_transaction_id,
+    }
+
+
+@router.post("/plans/{plan_id}/items", status_code=201)
+def create_plan_item(plan_id: int, body: PlanItemBody, db: Session = Depends(get_db)):
+    with user_errors():
+        plan = plan_service.get_plan(db, plan_id)
+        item = plan_service.create_item(db, plan, **_item_fields(body))
+    return {"id": item.id}
+
+
+@router.put("/plans/{plan_id}/items/{item_id}")
+def update_plan_item(plan_id: int, item_id: int, body: PlanItemBody, db: Session = Depends(get_db)):
+    with user_errors():
+        item = plan_service.get_item(db, item_id)
+        if item.plan_id != plan_id:
+            raise HTTPException(404, "Plan item not found")
+        plan_service.update_item(db, item, **_item_fields(body))
+    return {"ok": True}
+
+
+@router.delete("/plans/{plan_id}/items/{item_id}", status_code=204)
+def delete_plan_item(plan_id: int, item_id: int, db: Session = Depends(get_db)):
+    with user_errors():
+        item = plan_service.get_item(db, item_id)
+        if item.plan_id != plan_id:
+            raise HTTPException(404, "Plan item not found")
+        plan_service.delete_item(db, item)
+    return Response(status_code=204)

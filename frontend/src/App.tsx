@@ -10,6 +10,11 @@ const CategoriesTab = lazy(() => import('./pages/CategoriesTab'))
 const DangerTab = lazy(() => import('./pages/DangerTab'))
 const ImportPage = lazy(() => import('./pages/ImportPage'))
 const ImportRulesTab = lazy(() => import('./pages/ImportRulesTab'))
+const LoanDetailPage = lazy(() => import('./pages/LoanDetailPage'))
+const LoansPage = lazy(() => import('./pages/LoansPage'))
+const LoanTypesTab = lazy(() => import('./pages/LoanTypesTab'))
+const PlanDetailPage = lazy(() => import('./pages/PlanDetailPage'))
+const PlanPage = lazy(() => import('./pages/PlanPage'))
 const PreferencesTab = lazy(() => import('./pages/PreferencesTab'))
 const RecurringTab = lazy(() => import('./pages/RecurringTab'))
 const ReportsPage = lazy(() => import('./pages/ReportsPage'))
@@ -22,6 +27,8 @@ const LINKS = [
   { to: '/budget', label: 'Budget' },
   { to: '/reports', label: 'Report' },
   { to: '/cashflow', label: 'Cash flow' },
+  { to: '/loans', label: 'Loans' },
+  { to: '/plan', label: 'Plan' },
   { to: '/settings', label: 'Settings' },
 ]
 
@@ -58,11 +65,16 @@ export default function App() {
         <Route path="budget" element={<BudgetPage />} />
         <Route path="reports" element={<ReportsPage />} />
         <Route path="cashflow" element={<CashflowPage />} />
+        <Route path="loans" element={<LoansPage />} />
+        <Route path="loans/:id" element={<LoanDetailPage />} />
+        <Route path="plan" element={<PlanPage />} />
+        <Route path="plan/:id" element={<PlanDetailPage />} />
         <Route path="settings" element={<SettingsLayout />}>
           <Route index element={<Navigate to="categories" replace />} />
           <Route path="categories" element={<CategoriesTab />} />
           <Route path="accounts" element={<AccountsTab />} />
           <Route path="recurring" element={<RecurringTab />} />
+          <Route path="loan-types" element={<LoanTypesTab />} />
           <Route path="import-rules" element={<ImportRulesTab />} />
           <Route path="preferences" element={<PreferencesTab />} />
           <Route path="danger" element={<DangerTab />} />

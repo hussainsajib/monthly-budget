@@ -186,7 +186,15 @@ def signed_amount(direction: str, is_income: bool, cents: int) -> int:
 def commit_rows(db: Session, rows: list[ParsedRow], account_id: int | None) -> int:
     kinds = {c.id: c.kind for c in db.scalars(select(Category))}
     income = income_keys(db)
+    existing = set(
+        db.scalars(select(Transaction.import_hash).where(Transaction.import_hash.in_([r.key for r in rows])))
+    ) if rows else set()
+    created = 0
     for row in rows:
+        if row.key in existing:
+            continue
+        existing.add(row.key)
+        created += 1
         kind = kinds[row.category_id]
         if kind == TRANSFER:
             # A transfer leg is stored with the signed effect on its account (out negative, in positive).
@@ -205,4 +213,4 @@ def commit_rows(db: Session, rows: list[ParsedRow], account_id: int | None) -> i
             )
         )
     db.commit()
-    return len(rows)
+    return created

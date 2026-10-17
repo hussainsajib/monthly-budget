@@ -6,7 +6,7 @@ import { api } from '../api'
 import { Bar, SortHeader } from '../components/table'
 import { Modal, ViewToggle, useViewMode } from '../components/ui'
 import { centsToInput, formatMoney } from '../money'
-import { useSortedAccounts, useAccountConfig } from '../queries'
+import { useSortedAccounts, useAccountConfig, useLoanTypes } from '../queries'
 import { useRun } from '../toast'
 import type { Account } from '../types'
 
@@ -23,7 +23,7 @@ const EMPTY: Draft = { name: '', kind: 'bank', opening_balance: '0', opening_dat
 const fromAccount = (a: Account): Draft => ({
   name: a.name,
   kind: a.kind,
-  opening_balance: centsToInput(a.opening_balance_cents),
+  opening_balance: centsToInput(a.is_loan ? -a.opening_balance_cents : a.opening_balance_cents),
   opening_date: a.opening_date ?? '',
   is_active: a.is_active,
 })
@@ -32,9 +32,14 @@ const toBody = (d: Draft) => ({ ...d, opening_date: d.opening_date || null })
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 
+/** A loan reads as the amount owed (positive), the inverse of its signed ledger balance. */
+const displayBalance = (a: Account) => (a.is_loan ? a.owed_cents : a.current_balance_cents)
+const displayOpening = (a: Account) => (a.is_loan ? -a.opening_balance_cents : a.opening_balance_cents)
+
 function DraftFields({ draft, onChange, idPrefix }: { draft: Draft; onChange: (d: Draft) => void; idPrefix: string }) {
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => onChange({ ...draft, [k]: v })
   const types = useAccountConfig().data?.types ?? []
+  const isLoan = draft.kind === 'debt'
   return (
     <>
       <div>
@@ -60,7 +65,7 @@ function DraftFields({ draft, onChange, idPrefix }: { draft: Draft; onChange: (d
         </select>
       </div>
       <div>
-        <label htmlFor={`${idPrefix}-bal`}>Opening balance ($)</label>
+        <label htmlFor={`${idPrefix}-bal`}>{isLoan ? 'Opening owed ($)' : 'Opening balance ($)'}</label>
         <input
           id={`${idPrefix}-bal`}
           type="text"
@@ -132,6 +137,9 @@ function AccountTile({
   onToggle: (a: Account) => void
 }) {
   const config = useAccountConfig().data
+  const typeLabel = account.is_loan
+    ? (useLoanTypes().data?.types.find((t) => t.key === account.loan_type)?.label ?? 'Debt / loan')
+    : (config?.types.find((t) => t.key === account.kind)?.label ?? account.kind)
   return (
     <article className="tile">
       <div className="tile-head">
@@ -141,12 +149,22 @@ function AccountTile({
         </span>
         {!account.is_active && <span className="chip">inactive</span>}
       </div>
-      <div className="tile-value">{formatMoney(account.current_balance_cents)}</div>
+      <div className="tile-value">{formatMoney(displayBalance(account))}</div>
       <div className="tile-meta">
-        {config?.types.find((t) => t.key === account.kind)?.label ?? account.kind} · opened {account.opening_date ?? '—'}
+        {typeLabel} · opened {account.opening_date ?? '—'}
       </div>
       <div className="tile-foot">
-        {account.transaction_count ? (
+        {account.is_loan ? (
+          <Link
+            to={`/loans/${account.id}`}
+            className="num-link"
+            aria-label={`Open the ${account.name} loan`}
+            data-tooltip-id="settings-tip"
+            data-tooltip-content="Open loan"
+          >
+            Loan details
+          </Link>
+        ) : account.transaction_count ? (
           <Link
             to={`/transactions?account_id=${account.id}`}
             className="num-link"
@@ -203,6 +221,7 @@ function AccountsTilesSkeleton() {
 export default function AccountsTab() {
   const run = useRun()
   const config = useAccountConfig().data
+  const loanTypes = useLoanTypes().data?.types ?? []
   const { view, change: setView } = useViewMode('accounts')
   const [sorting, setSorting] = useState<SortingState>([{ id: 'name', desc: false }])
   const [draft, setDraft] = useState<Draft>(EMPTY)
@@ -217,8 +236,14 @@ export default function AccountsTab() {
   const editing = modal?.mode === 'edit' ? accounts.find((a) => a.id === modal.id) : undefined
   const active = accounts.filter((a) => a.is_active)
   const inactive = accounts.length - active.length
-  const activeBalance = active.reduce((sum, a) => sum + a.current_balance_cents, 0)
+  const activeCash = active.filter((a) => !a.is_loan).reduce((sum, a) => sum + a.current_balance_cents, 0)
+  const activeLoans = active.filter((a) => a.is_loan)
+  const activeOwed = activeLoans.reduce((sum, a) => sum + a.owed_cents, 0)
   const activeTx = active.reduce((sum, a) => sum + a.transaction_count, 0)
+  const typeLabel = (a: Account) =>
+    a.is_loan
+      ? (loanTypes.find((t) => t.key === a.loan_type)?.label ?? 'Debt / loan')
+      : (config?.types.find((t) => t.key === a.kind)?.label ?? a.kind)
 
   function closeModal() {
     setModal(null)
@@ -286,7 +311,7 @@ export default function AccountsTab() {
       header: ({ column }) => <SortHeader column={column} label="Type" />,
       cell: ({ row }) => (
         <span className="row-label">
-          <span className={`kind-dot ${row.original.kind}`} /> {config?.types.find((t) => t.key === row.original.kind)?.label ?? row.original.kind}
+          <span className={`kind-dot ${row.original.kind}`} /> {typeLabel(row.original)}
         </span>
       ),
     },
@@ -294,7 +319,7 @@ export default function AccountsTab() {
       id: 'opening',
       accessorKey: 'opening_balance_cents',
       header: ({ column }) => <SortHeader column={column} label="Opening" />,
-      cell: ({ row }) => formatMoney(row.original.opening_balance_cents),
+      cell: ({ row }) => formatMoney(displayOpening(row.original)),
     },
     {
       id: 'opening_date',
@@ -306,7 +331,25 @@ export default function AccountsTab() {
       id: 'balance',
       accessorKey: 'current_balance_cents',
       header: ({ column }) => <SortHeader column={column} label="Balance" />,
-      cell: ({ row }) => <b>{formatMoney(row.original.current_balance_cents)}</b>,
+      cell: ({ row }) => {
+        const a = row.original
+        return (
+          <span className="row-label">
+            <b>{formatMoney(displayBalance(a))}</b>
+            {a.is_loan && (
+              <Link
+                className="chip"
+                to={`/loans/${a.id}`}
+                aria-label={`Open the ${a.name} loan`}
+                data-tooltip-id="settings-tip"
+                data-tooltip-content="Open loan"
+              >
+                owed
+              </Link>
+            )}
+          </span>
+        )
+      },
     },
     {
       id: 'transactions',
@@ -391,7 +434,8 @@ export default function AccountsTab() {
         <h2>Accounts</h2>
         <span className="set-counts">
           <span className="chip">{plural(accounts.length, 'account')}</span>
-          <span className="chip">{formatMoney(activeBalance)} across active</span>
+          <span className="chip">{formatMoney(activeCash)} cash</span>
+          {activeOwed > 0 && <span className="chip">{formatMoney(activeOwed)} owed</span>}
           {inactive > 0 && <span className="chip">{inactive} inactive</span>}
         </span>
         <ViewToggle view={view} onChange={setView} />
@@ -537,10 +581,18 @@ export default function AccountsTab() {
             <tfoot>
               <tr className="total-row">
                 <td colSpan={4}>{plural(active.length, 'active account')}</td>
-                <td className="num">{formatMoney(activeBalance)}</td>
+                <td className="num">{formatMoney(activeCash)}</td>
                 <td className="num">{activeTx || <span className="empty-cell">—</span>}</td>
                 <td className="num hide-sm" />
               </tr>
+              {activeLoans.length > 0 && (
+                <tr className="total-row">
+                  <td colSpan={4}>Owed on {plural(activeLoans.length, 'loan')}</td>
+                  <td className="num">{formatMoney(activeOwed)}</td>
+                  <td className="num" />
+                  <td className="num hide-sm" />
+                </tr>
+              )}
             </tfoot>
           </table>
         </div>

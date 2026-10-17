@@ -1,8 +1,11 @@
-"""Configurable account types (bank / credit / cash by default).
+"""Configurable account types (bank / cash / savings / investment / debt by default).
 
 Stored compactly in ``AppSetting`` so they ride along with ``config_io`` exports and stay
 under that column's length limit. The list is seeded from ``DEFAULT_ACCOUNT_TYPES`` on
 first run and is not user-editable; it drives the account type picker and labels.
+
+Credit cards are not a separate type: a card is ``debt`` with a ``credit_card`` loan type
+(see ``app.services.loan_config``).
 """
 
 from __future__ import annotations
@@ -17,11 +20,10 @@ ACCOUNT_TYPES_KEY = "account_types"
 
 DEFAULT_ACCOUNT_TYPES: tuple[tuple[str, str], ...] = (
     ("bank", "Bank / Chequing"),
-    ("credit", "Credit card"),
     ("cash", "Cash"),
     ("savings", "Savings"),
     ("investment", "Investment"),
-    ("debt", "Debt"),
+    ("debt", "Debt / loan"),
 )
 
 

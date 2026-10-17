@@ -20,6 +20,7 @@ from app.models import (
     AppSetting,
     Category,
     ImportRule,
+    LoanDetails,
     MonthlyBudget,
     RecurringTemplate,
     Transaction,
@@ -27,6 +28,7 @@ from app.models import (
 from app.services.account_config import ensure_account_config
 from app.services.categories import MAX_DEPTH, Node, load_tree
 from app.services.category_config import ensure_category_config, type_keys
+from app.services.loan_config import ensure_loan_config
 from app.services.recurring import list_templates, validate_schedule
 
 FORMAT_VERSION = 1
@@ -46,12 +48,50 @@ def _names(node: Node) -> list[str]:
     return parts[::-1]
 
 
+def _loan_dict(details: LoanDetails | None) -> dict | None:
+    if details is None:
+        return None
+    return {
+        "loan_type": details.loan_type,
+        "lender": details.lender,
+        "original_principal_cents": details.original_principal_cents,
+        "rate_bps": details.rate_bps,
+        "is_interest_bearing": details.is_interest_bearing,
+        "min_payment_cents": details.min_payment_cents,
+        "due_day": details.due_day,
+        "credit_limit_cents": details.credit_limit_cents,
+        "reference": details.reference,
+        "notes": details.notes,
+    }
+
+
+def _apply_loan(account: Account, entry: dict | None) -> None:
+    """Attach/refresh a loan_details row from an exported account. ``None`` means 'not a loan'."""
+    if not entry:
+        if account.loan is not None:
+            account.loan = None
+        return
+    details = account.loan or LoanDetails()
+    details.loan_type = str(entry.get("loan_type", ""))[:20]
+    details.lender = str(entry.get("lender", ""))[:80]
+    details.original_principal_cents = int(entry.get("original_principal_cents", 0))
+    details.rate_bps = int(entry.get("rate_bps", 0))
+    details.is_interest_bearing = bool(entry.get("is_interest_bearing", False))
+    details.min_payment_cents = int(entry.get("min_payment_cents", 0))
+    details.due_day = int(entry.get("due_day", 0))
+    details.credit_limit_cents = int(entry.get("credit_limit_cents", 0))
+    details.reference = str(entry.get("reference", ""))
+    details.notes = str(entry.get("notes", ""))
+    account.loan = details
+
+
 # ------------------------------------------------------------------ export
 
 
 def export_config(db: Session) -> dict:
     ensure_category_config(db)
     ensure_account_config(db)
+    ensure_loan_config(db)
     tree = load_tree(db)
     path_of = {node_id: _names(node) for node_id, node in tree.nodes.items()}
 
@@ -74,6 +114,7 @@ def export_config(db: Session) -> dict:
             "opening_balance_cents": a.opening_balance_cents,
             "opening_date": a.opening_date.isoformat() if a.opening_date else None,
             "is_active": a.is_active,
+            "loan": _loan_dict(a.loan),
         }
         for a in db.scalars(select(Account).order_by(Account.id))
     ]
@@ -130,6 +171,7 @@ def _wipe_setup(db: Session) -> None:
     db.execute(delete(MonthlyBudget))
     db.execute(delete(RecurringTemplate))
     db.execute(delete(ImportRule))
+    db.execute(delete(LoanDetails))  # children before their accounts (FK cascade is not always enforced)
     # parent_id is ON DELETE RESTRICT: remove leaves first, repeatedly, until nothing is left
     while True:
         parents = select(Category.parent_id).where(Category.parent_id.is_not(None))
@@ -217,6 +259,7 @@ def _apply(db: Session, data: dict) -> dict[str, int]:
         opening = entry.get("opening_date")
         acc.opening_date = date.fromisoformat(opening) if opening else None
         acc.is_active = bool(entry.get("is_active", True))
+        _apply_loan(acc, entry.get("loan"))
         counts["accounts"] += 1
     db.flush()
 

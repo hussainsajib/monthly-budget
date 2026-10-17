@@ -261,7 +261,7 @@ def test_account_stats(client, ids):
 
 def test_accounts_sort_by_balance(client, db):
     made = {}
-    seeds = [("Sort Zeta", "bank", "10"), ("Sort Alpha", "cash", "300"), ("Sort Mid", "credit", "100")]
+    seeds = [("Sort Zeta", "bank", "10"), ("Sort Alpha", "cash", "300"), ("Sort Mid", "savings", "100")]
     for name, kind, balance in seeds:
         res = client.post("/api/accounts", json={"name": name, "kind": kind, "opening_balance": balance})
         made[name] = res.json()["id"]
@@ -540,14 +540,13 @@ def test_thresholds_roundtrip(client, ids):
 
 def test_account_config_endpoints(client, db):
     cfg = client.get("/api/settings/account-config").json()
-    assert [t["key"] for t in cfg["types"]] == ["bank", "credit", "cash", "savings", "investment", "debt"]
+    assert [t["key"] for t in cfg["types"]] == ["bank", "cash", "savings", "investment", "debt"]
     assert cfg["types"] == [
         {"key": "bank", "label": "Bank / Chequing"},
-        {"key": "credit", "label": "Credit card"},
         {"key": "cash", "label": "Cash"},
         {"key": "savings", "label": "Savings"},
         {"key": "investment", "label": "Investment"},
-        {"key": "debt", "label": "Debt"},
+        {"key": "debt", "label": "Debt / loan"},
     ]
     # validated against the configured set
     made = client.post("/api/accounts", json={"name": "Savings Pot", "kind": "savings", "opening_balance": "10"})

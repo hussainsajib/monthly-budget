@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.models import REIMBURSEMENT, Category, Transaction
@@ -31,9 +31,32 @@ def ensure_reimbursement_category(db: Session) -> Category:
     type: money out is positive.
     """
     section = transfer_service.ensure_transfer_section(db)
-    leaf = db.scalars(
-        select(Category).where(Category.kind == REIMBURSEMENT, Category.parent_id == section.id)
-    ).first()
+    leaves = list(
+        db.scalars(
+            select(Category)
+            .where(Category.kind == REIMBURSEMENT, Category.parent_id == section.id)
+            .order_by(Category.id)
+        )
+    )
+    if len(leaves) > 1:
+        # A duplicate leaf can sneak in via past migrations. Collapse onto the leaf a transaction
+        # (or recurring rule / import rule) actually references, else the first; drop the extras.
+        usage = {
+            c.id: count
+            for c, count in db.execute(
+                select(Transaction.category_id, func.count())
+                .where(Transaction.category_id.in_([c.id for c in leaves]))
+                .group_by(Transaction.category_id)
+            )
+        }
+        keeper = max(leaves, key=lambda c: (usage.get(c.id, 0), -c.id))
+        for extra in (c for c in leaves if c.id != keeper.id):
+            db.execute(
+                update(Transaction).where(Transaction.category_id == extra.id).values(category_id=keeper.id)
+            )
+            db.delete(extra)
+        leaves = [keeper]
+    leaf = leaves[0] if leaves else None
     if leaf is None:
         leaf = Category(
             name=CATEGORY_NAME, parent_id=section.id, kind=REIMBURSEMENT, is_active=True, sort_order=10_001
