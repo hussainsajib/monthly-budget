@@ -4,7 +4,7 @@ const FORMAT = new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CA
 
 export function formatMoney(cents: number | null | undefined, blankZero = false): string {
   if (cents == null || (blankZero && cents === 0)) return ''
-  return FORMAT.format(cents / 100)
+  return FORMAT.format((Object.is(cents, -0) ? 0 : cents) / 100)
 }
 
 /** Plain "12.34" for form inputs. */
