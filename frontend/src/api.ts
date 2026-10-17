@@ -176,6 +176,10 @@ export const api = {
   updateLoan: (id: number, b: LoanUpdateBody) => put<{ account_id: number }>(`/loans/${id}`, b),
   deleteLoan: (id: number) => del(`/loans/${id}`),
   loanPayment: (id: number, b: LoanPaymentBody) => post<{ transfer_id: string }>(`/loans/${id}/payments`, b),
+  convertToLoanPayment: (loanAccountId: number, txnId: number) =>
+    post<{ transfer_id: string; loan_account_id: number }>(`/loans/${loanAccountId}/payments/from-transaction`, {
+      txn_id: txnId,
+    }),
   loanTypes: () => get<LoanTypeConfig>('/settings/loan-types'),
   setLoanTypes: (types: { key: string; label: string }[]) =>
     put<LoanTypeConfig>('/settings/loan-types', { types }),

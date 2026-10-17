@@ -249,6 +249,91 @@ def test_debt_accounts_without_details_are_reported_once(client, db):
         db.commit()
 
 
+def test_a_money_out_row_becomes_a_loan_payment(client, ids, make_loan):
+    cats, accs = ids
+    account_id = make_loan()
+    chequing = accs["Chequing"]
+    created = client.post(
+        "/api/transactions",
+        json={
+            "date": "2026-03-01",
+            "description": "Lease payment",
+            "category_id": cats["Dining Out / Takeout"],
+            "account_id": chequing,
+            "amount": "450",
+            "notes": "car lease",
+        },
+    )
+    assert created.status_code == 201, created.text
+    txn_id = created.json()["id"]
+    owed_before = _loan(client, account_id)["owed_cents"]
+
+    res = client.post(
+        f"/api/loans/{account_id}/payments/from-transaction", json={"txn_id": txn_id}
+    )
+    assert res.status_code == 201, res.text
+    transfer_id = res.json()["transfer_id"]
+
+    # Two legs share the transfer, and the loan balance dropped by the payment.
+    assert _loan(client, account_id)["owed_cents"] == owed_before - 45_000
+    on_loan = client.get("/api/transactions", params={"account_id": account_id}).json()["items"]
+    assert len(on_loan) == 1 and on_loan[0]["transfer_id"] == transfer_id
+    out_leg = client.get("/api/transactions", params={"account_id": chequing}).json()["items"][0]
+    assert out_leg["id"] == txn_id  # the imported row itself becomes the outgoing leg
+    assert out_leg["transfer_id"] == transfer_id
+    assert out_leg["kind"] == "transfer"
+    assert out_leg["amount_cents"] == -45_000
+    assert out_leg["notes"] == "car lease"
+    transfers = client.get(f"/api/transfers/{transfer_id}").json()
+    assert transfers["amount_cents"] == 45_000 and transfers["to_account_id"] == account_id
+
+
+def test_only_a_money_out_row_can_become_a_payment(client, ids, make_loan):
+    cats, accs = ids
+    account_id = make_loan()
+    chequing = accs["Chequing"]
+    # A refund: a negative amount on an expense category reads as money *in*.
+    money_in = client.post(
+        "/api/transactions",
+        json={
+            "date": "2026-03-01",
+            "description": "Refund",
+            "category_id": cats["Dining Out / Takeout"],
+            "account_id": chequing,
+            "amount": "-450",
+        },
+    ).json()["id"]
+    res = client.post(f"/api/loans/{account_id}/payments/from-transaction", json={"txn_id": money_in})
+    assert res.status_code == 400
+
+    # A row already part of a transfer is refused too.
+    client.post(
+        "/api/transfers",
+        json={
+            "date": "2026-03-02",
+            "description": "Move",
+            "amount": "100",
+            "from_account_id": chequing,
+            "to_account_id": accs["Savings"],
+            "notes": "",
+        },
+    )
+    leg = next(
+        t
+        for t in client.get("/api/transactions", params={"account_id": chequing}).json()["items"]
+        if t["transfer_id"] is not None
+    )
+    assert (
+        client.post(
+            f"/api/loans/{account_id}/payments/from-transaction", json={"txn_id": leg["id"]}
+        ).status_code
+        == 400
+    )
+    assert client.post(
+        f"/api/loans/{account_id}/payments/from-transaction", json={"txn_id": 999999}
+    ).status_code == 404
+
+
 def test_history_and_trend_track_the_balance(client, ids, make_loan):
     _, accs = ids
     account_id = make_loan()

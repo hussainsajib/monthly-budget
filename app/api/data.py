@@ -355,6 +355,10 @@ class LoanPaymentBody(BaseModel):
     notes: str | None = None
 
 
+class LoanPaymentFromTxnBody(BaseModel):
+    txn_id: int
+
+
 class LoanTypesBody(BaseModel):
     types: list[dict]
 
@@ -504,6 +508,20 @@ def record_loan_payment(account_id: int, body: LoanPaymentBody, db: Session = De
             notes=body.notes,
         )
     return {"transfer_id": transfer_id}
+
+
+@router.post("/loans/{account_id}/payments/from-transaction", status_code=201)
+def convert_transaction_to_loan_payment(
+    account_id: int, body: LoanPaymentFromTxnBody, db: Session = Depends(get_db)
+):
+    """Reclassify an already-imported money-out row as a payment on this loan."""
+    account = _loan_or_404(db, account_id)
+    txn = db.get(Transaction, body.txn_id)
+    if txn is None:
+        raise HTTPException(404, "Transaction not found")
+    with user_errors():
+        transfer_id = loan_service.convert_to_payment(db, account, txn)
+    return {"transfer_id": transfer_id, "loan_account_id": account.id}
 
 
 @router.get("/settings/loan-types")

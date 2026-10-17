@@ -12,6 +12,7 @@ so this module exposes ``owed_cents`` (positive = you owe) for loan surfaces.
 from __future__ import annotations
 
 import calendar
+import uuid
 from dataclasses import dataclass
 from datetime import date
 
@@ -19,6 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import Account, LoanDetails, Transaction
+from app.models.ledger import signed_delta
 from app.services import transfers as transfer_service
 from app.services.balances import balance_deltas
 from app.services.cashflow import build_ledger
@@ -366,3 +368,43 @@ def record_payment(
         to_account_id=loan.id,
         notes=notes,
     )
+
+
+def convert_to_payment(db: Session, loan: Account, txn: Transaction) -> str:
+    """Turn an already-recorded money-out row into a payment on ``loan``.
+
+    The row keeps its date, description, import hash and recurring link, but becomes the outgoing
+    leg of a transfer; the matching incoming leg is written onto the loan. Use it when a lease or
+    loan payment arrived as an ordinary expense from a bank import.
+    """
+    if not is_loan(loan):
+        raise LoanError("That account is not a loan")
+    if txn.transfer_id is not None or txn.reimbursement_id is not None:
+        raise LoanError("That row is already linked to a transfer or a reimbursement")
+    if txn.account_id is None:
+        raise LoanError("That row has no account")
+    if txn.account_id == loan.id:
+        raise LoanError("That row is already on the loan")
+    is_income = txn.category.kind in income_keys(db)
+    delta = signed_delta(txn.amount_cents, kind=txn.category.kind, is_income=is_income)
+    if delta >= 0:
+        raise LoanError("Only a money-out row can become a loan payment")
+    amount = abs(txn.amount_cents)
+    category = transfer_service.ensure_transfer_category(db)
+    transfer_id = str(uuid.uuid4())
+    txn.category_id = category.id
+    txn.amount_cents = -amount
+    txn.transfer_id = transfer_id
+    db.add(
+        Transaction(
+            date=txn.date,
+            description=txn.description,
+            category_id=category.id,
+            account_id=loan.id,
+            amount_cents=amount,
+            notes=txn.notes,
+            transfer_id=transfer_id,
+        )
+    )
+    db.commit()
+    return transfer_id

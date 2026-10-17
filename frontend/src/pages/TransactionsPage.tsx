@@ -139,6 +139,8 @@ export default function TransactionsPage() {
   const [addMode, setAddMode] = useState<'txn' | 'transfer'>('txn')
   const [transferInitial, setTransferInitial] = useState<TransferFormValues>(() => blankTransfer(todayIso()))
   const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [converting, setConverting] = useState<Txn | null>(null)
+  const [convertingLoanId, setConvertingLoanId] = useState<number | null>(null)
 
   const sort = sorting[0]?.id ?? 'date'
   const dir = sorting[0] && sorting[0].desc === false ? 'asc' : 'desc'
@@ -310,6 +312,27 @@ export default function TransactionsPage() {
       () => 'Connected as a reimbursement',
     )
     if (ok) setSelected(new Set())
+  }
+
+  const loanAccounts = (accounts.data ?? []).filter((x) => x.is_loan && x.is_active)
+  const single = selectedItems.length === 1 ? selectedItems[0] : undefined
+  const convertible =
+    single != null &&
+    single.account_id != null &&
+    single.transfer_id == null &&
+    single.reimbursement_id == null &&
+    deltaOf(single) < 0
+
+  async function convertToLoanPayment() {
+    if (!converting || convertingLoanId == null) return
+    const ok = await run(
+      () => api.convertToLoanPayment(convertingLoanId, converting.id).then((r) => r.transfer_id),
+      () => `Recorded a payment to ${accountById.get(convertingLoanId)?.name ?? 'the loan'}`,
+    )
+    if (ok) {
+      setConverting(null)
+      setSelected(new Set())
+    }
   }
 
   const chips: { key: string; label: string; clear: () => void }[] = []
@@ -638,6 +661,18 @@ export default function TransactionsPage() {
               Connect as reimbursement
             </button>
           )}
+          {convertible && (
+            <button
+              type="button"
+              className="secondary shrink"
+              onClick={() => {
+                setConvertingLoanId(null)
+                setConverting(single ?? null)
+              }}
+            >
+              As loan payment
+            </button>
+          )}
           <button type="button" className="secondary small shrink" onClick={() => setSelected(new Set())}>
             Clear
           </button>
@@ -759,6 +794,43 @@ export default function TransactionsPage() {
               }}
             />
           )}
+        </Modal>
+      )}
+
+      {converting && (
+        <Modal title="Record as a loan payment" onClose={() => setConverting(null)}>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              void convertToLoanPayment()
+            }}
+          >
+            <p className="small muted">
+              Turn this row — <b>{converting.description}</b> ({formatMoney(converting.amount_cents)}) — into a
+              payment on a loan. It stays put on {converting.account_name ?? 'its account'}; the matching leg is
+              written onto the loan.
+            </p>
+            <div className="form-grid">
+              <div className="field-full">
+                <label htmlFor="convert-loan">Pays</label>
+                <AccountSelect
+                  id="convert-loan"
+                  accounts={loanAccounts}
+                  value={convertingLoanId}
+                  onChange={setConvertingLoanId}
+                  blank="Choose a loan…"
+                />
+              </div>
+            </div>
+            <div className="row" style={{ marginTop: 8 }}>
+              <button className="shrink" type="submit" disabled={convertingLoanId == null}>
+                Record payment
+              </button>
+              <button className="secondary shrink" type="button" onClick={() => setConverting(null)}>
+                Cancel
+              </button>
+            </div>
+          </form>
         </Modal>
       )}
 
