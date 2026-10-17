@@ -9,6 +9,7 @@ import type {
   ImportPreviewRow,
   ImportRule,
   ImportRuleBody,
+  LedgerCheck,
   LoanCreateBody,
   LoanDetail,
   LoanPaymentBody,
@@ -119,6 +120,8 @@ export const api = {
     post<{ transfer_id: string }>('/transfers/connect', { from_id: fromId, to_id: toId }),
   connectReimbursement: (firstId: number, secondId: number) =>
     post<{ reimbursement_id: string }>('/reimbursements/connect', { first_id: firstId, second_id: secondId }),
+
+  checkLedger: () => get<LedgerCheck>('/ledger/check'),
 
   recurring: (params: Record<string, string | number | null | undefined> = {}) =>
     get<Recurring[]>(`/recurring${qs(params)}`),

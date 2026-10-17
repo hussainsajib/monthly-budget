@@ -15,6 +15,22 @@ TRANSFER = "transfer"
 REIMBURSEMENT = "reimbursement"
 
 
+def signed_delta(amount_cents: int, *, kind: str, is_income: bool) -> int:
+    """The signed effect of a transaction on its account, given its category's direction.
+
+    This is the one rule for what a row does to a balance; ``balances.delta_expression`` is its SQL
+    twin and a test pins the two together. A transfer leg is stored already signed (money out
+    negative, money in positive); every other row is signed relative to its category, so a positive
+    amount is money out on an expense and money in on an income.
+
+    Linking rows (a transfer or a reimbursement pair) only reclassifies them for budgets and
+    reports; it never changes what the account balance does, which is why the category alone decides.
+    """
+    if kind == TRANSFER:
+        return amount_cents
+    return amount_cents if is_income else -amount_cents
+
+
 class Category(Base):
     """A node in the category tree.
 
@@ -88,12 +104,5 @@ class Transaction(Base):
 
     def cash_delta_cents(self, is_income: bool) -> int:
         """Effect on the owning account's balance; the caller resolves the category type's direction."""
-        if (
-            self.transfer_id is not None
-            or self.reimbursement_id is not None
-            or (self.category is not None and self.category.kind == TRANSFER)
-        ):
-            # Transfer legs (connected or a pending import) and paired reimbursements are already
-            # stored with the signed effect on the account.
-            return self.amount_cents
-        return self.amount_cents if is_income else -self.amount_cents
+        kind = self.category.kind if self.category is not None else EXPENSE
+        return signed_delta(self.amount_cents, kind=kind, is_income=is_income)

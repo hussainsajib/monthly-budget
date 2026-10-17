@@ -18,7 +18,7 @@ from app.core.money import to_cents
 from app.db.session import get_db
 from app.models import REIMBURSEMENT, TRANSFER, Account, Category, ImportRule, RecurringTemplate, Transaction
 from app.schemas.transaction import TransactionInput
-from app.services import budgets, import_rules, importing, reports
+from app.services import budgets, import_rules, importing, integrity, reports
 from app.services import categories as category_service
 from app.services import loans as loan_service
 from app.services import plans as plan_service
@@ -749,6 +749,12 @@ def connect_reimbursement(body: ConnectReimbursementBody, db: Session = Depends(
     with user_errors():
         reimbursement_id = reimbursement_service.connect(db, first, second)
     return {"reimbursement_id": reimbursement_id}
+
+
+@router.get("/ledger/check")
+def check_ledger(db: Session = Depends(get_db)):
+    """Read-only integrity report over the transfer and reimbursement pairings."""
+    return integrity.validate_ledger(db)
 
 
 @router.get("/transfers/{transfer_id}")

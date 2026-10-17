@@ -1,16 +1,20 @@
 import { useQuery } from '@tanstack/react-query'
-import { Trash } from 'lucide-react'
+import { Search, Trash } from 'lucide-react'
 import { useState } from 'react'
 import { api } from '../api'
 import { Loading } from '../components/ui'
-import { useRun } from '../toast'
+import { useRun, useToast } from '../toast'
+import type { LedgerCheck } from '../types'
 
 export default function DangerTab() {
   const run = useRun()
+  const { fail } = useToast()
   const query = useQuery({ queryKey: ['txn-count'], queryFn: () => api.transactions({ page: 1 }) })
   const total = query.data?.total
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [checking, setChecking] = useState(false)
+  const [check, setCheck] = useState<LedgerCheck | null>(null)
 
   async function clear() {
     setBusy(true)
@@ -21,6 +25,19 @@ export default function DangerTab() {
     setBusy(false)
     if (res) setConfirming(false)
   }
+
+  async function checkLedger() {
+    setChecking(true)
+    try {
+      setCheck(await api.checkLedger())
+    } catch (err) {
+      fail(err instanceof Error ? err.message : 'Something went wrong')
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  const broken = check ? check.issues.reduce((n, issue) => n + issue.count, 0) : 0
 
   return (
     <>
@@ -67,6 +84,44 @@ export default function DangerTab() {
                 </div>
               </>
             )}
+          </div>
+
+          <div style={{ marginTop: 24 }}>
+            <h2 style={{ marginTop: 0 }}>Check data</h2>
+            <p className="small muted">
+              Balances are worked out from your transactions, so a transfer or reimbursement that came out half-written would
+              quietly move money the wrong way. This reads the pairings and reports anything that does not line up.
+            </p>
+            <div className="row" style={{ marginTop: 12 }}>
+              <button className="secondary shrink with-icon" type="button" onClick={checkLedger} disabled={checking}>
+                <Search size={16} /> Check data
+              </button>
+            </div>
+
+            {check &&
+              (check.ok ? (
+                <div className="flash ok" role="status" style={{ marginTop: 16, marginBottom: 0 }}>
+                  Checked {check.scanned.transactions} transaction{check.scanned.transactions === 1 ? '' : 's'} across{' '}
+                  {check.scanned.transfers} transfer{check.scanned.transfers === 1 ? '' : 's'} and {check.scanned.reimbursements}{' '}
+                  reimbursement{check.scanned.reimbursements === 1 ? '' : 's'} — everything lines up.
+                </div>
+              ) : (
+                <div className="flash err" role="alert" style={{ marginTop: 16, marginBottom: 0 }}>
+                  <p style={{ marginTop: 0 }}>
+                    {broken} entr{broken === 1 ? 'y needs' : 'ies need'} a look:
+                  </p>
+                  <ul>
+                    {check.issues.map((issue) => (
+                      <li key={issue.code}>
+                        {issue.message} <span className="muted">({issue.count})</span>
+                        {issue.txn_ids.length > 0 && (
+                          <div className="small muted">Transaction ids: {issue.txn_ids.join(', ')}</div>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
           </div>
         </div>
       )}

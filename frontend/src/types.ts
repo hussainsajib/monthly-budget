@@ -569,3 +569,20 @@ export interface LoanPaymentBody {
   description: string
   notes: string | null
 }
+
+export interface LedgerIssue {
+  code: string
+  message: string
+  count: number
+  txn_ids: number[]
+}
+
+export interface LedgerCheck {
+  ok: boolean
+  issues: LedgerIssue[]
+  scanned: {
+    transactions: number
+    transfers: number
+    reimbursements: number
+  }
+}

@@ -1,8 +1,8 @@
 """Signed balance deltas, kept in one place so the accounts table, the loans page and cash flow agree.
 
 An account's balance is never stored: it is ``opening_balance_cents`` plus the sum of its
-transactions' signed deltas. The sign of a transaction depends on its category kind (see
-``Transaction.cash_delta_cents`` for the per-row equivalent), so the expression lives here.
+transactions' signed deltas. The rule itself lives in ``app.models.ledger.signed_delta``; this is
+its SQL form, and ``tests/test_integrity.py`` pins the two together.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from app.services.category_config import income_keys
 
 
 def delta_expression(income: set[str]):
-    """The signed effect of a transaction on its account's balance, as a SQL expression."""
+    """SQL form of ``app.models.ledger.signed_delta``: one branch per decision that function makes."""
     return case(
         (Category.kind == TRANSFER, Transaction.amount_cents),
         (Category.kind.in_(income), Transaction.amount_cents),
