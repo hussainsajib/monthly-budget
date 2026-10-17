@@ -12,6 +12,7 @@ function detailsOf(
   loanType: string,
   lender: string,
   original: string,
+  residual: string,
   rate: string,
   interestBearing: boolean,
   minPayment: string,
@@ -24,6 +25,7 @@ function detailsOf(
     loan_type: loanType,
     lender,
     original_principal: original || '0',
+    residual: residual || '0',
     rate: rate || '0',
     is_interest_bearing: interestBearing,
     min_payment: minPayment || '0',
@@ -55,6 +57,7 @@ export function LoanFormModal({
   const [loanType, setLoanType] = useState(loan?.loan_type ?? '')
   const [lender, setLender] = useState(loan?.lender ?? '')
   const [original, setOriginal] = useState(loan ? centsToInput(loan.original_principal_cents) : '0')
+  const [residual, setResidual] = useState(loan ? centsToInput(loan.residual_cents) : '0')
   const [rate, setRate] = useState(loan ? centsToInput(loan.rate_bps) : '0')
   const [interestBearing, setInterestBearing] = useState(loan?.is_interest_bearing ?? false)
   const [minPayment, setMinPayment] = useState(loan ? centsToInput(loan.min_payment_cents) : '0')
@@ -77,6 +80,7 @@ export function LoanFormModal({
       effectiveType,
       lender,
       original,
+      residual,
       rate,
       interestBearing,
       minPayment,
@@ -168,6 +172,20 @@ export function LoanFormModal({
               value={original}
               onChange={(e) => setOriginal(e.target.value)}
             />
+          </div>
+          <div>
+            <label htmlFor="loan-residual">Residual / balloon ($)</label>
+            <input
+              id="loan-residual"
+              type="text"
+              inputMode="decimal"
+              value={residual}
+              onChange={(e) => setResidual(e.target.value)}
+            />
+            <span className="small muted">
+              Part of the amount owed that a final payment settles (a lease buyout). Leave 0 for a loan that pays
+              down to nothing.
+            </span>
           </div>
           <div>
             <label htmlFor="loan-open-date">Opening date</label>

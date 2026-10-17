@@ -317,6 +317,7 @@ class LoanDetailsBody(BaseModel):
     loan_type: str = ""
     lender: str = ""
     original_principal: str = "0"
+    residual: str = "0"
     rate: str = "0"  # annual percent, e.g. "6.49"
     is_interest_bearing: bool = False
     min_payment: str = "0"
@@ -364,10 +365,14 @@ def _details_fields(db: Session, body: LoanDetailsBody) -> dict:
             raise ValueError("Unknown loan type")
         if body.due_day and not 1 <= body.due_day <= 31:
             raise ValueError("Due day must be between 1 and 31")
+        residual = to_cents(body.residual or "0")
+        if residual < 0:
+            raise ValueError("The residual cannot be negative")
         return {
             "loan_type": body.loan_type,
             "lender": body.lender.strip()[:80],
             "original_principal_cents": to_cents(body.original_principal or "0"),
+            "residual_cents": residual,
             # percent to basis points: "6.49" -> 649, which is the same scaling as cents.
             "rate_bps": to_cents(body.rate or "0"),
             "is_interest_bearing": body.is_interest_bearing,
@@ -425,6 +430,8 @@ def create_loan(body: LoanCreateBody, db: Session = Depends(get_db)):
         owed = to_cents(body.owed or "0")
         if owed < 0:
             raise ValueError("Amount owed cannot be negative")
+        if fields["residual_cents"] > owed:
+            raise ValueError("The residual cannot be more than the amount owed")
         disbursement = None
         if body.disbursement_account_id is not None:
             amount = to_cents(body.disbursement_amount or "0")
@@ -455,6 +462,8 @@ def update_loan(account_id: int, body: LoanUpdateBody, db: Session = Depends(get
         owed = to_cents(body.owed or "0")
         if owed < 0:
             raise ValueError("Amount owed cannot be negative")
+        if fields["residual_cents"] > owed:
+            raise ValueError("The residual cannot be more than the amount owed")
         name = body.name.strip()
         if not name:
             raise ValueError("A loan needs a name")

@@ -25,6 +25,9 @@ class LoanDetails(Base):
     loan_type: Mapped[str] = mapped_column(String(20), default="")
     lender: Mapped[str] = mapped_column(String(80), default="")
     original_principal_cents: Mapped[int] = mapped_column(Integer, default=0)
+    # Part of the balance a final balloon/buyout settles (a lease residual). Already included in the
+    # balance; kept here so the monthly portion and the balloon can be read apart.
+    residual_cents: Mapped[int] = mapped_column(Integer, default=0)
     rate_bps: Mapped[int] = mapped_column(Integer, default=0)
     is_interest_bearing: Mapped[bool] = mapped_column(Boolean, default=False)
     min_payment_cents: Mapped[int] = mapped_column(Integer, default=0)

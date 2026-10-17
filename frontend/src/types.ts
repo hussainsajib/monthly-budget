@@ -461,6 +461,10 @@ export interface Loan {
   loan_type_label: string
   lender: string
   original_principal_cents: number
+  /** Part of the balance a final balloon/buyout settles (a lease residual). */
+  residual_cents: number
+  /** Owed minus the residual: what the monthly payments are working down. */
+  amortizing_owed_cents: number
   principal_basis_cents: number
   principal_paid_cents: number
   payoff_pct: number
@@ -503,6 +507,7 @@ export interface LoanTotals {
   owed_cents: number
   count: number
   original_cents: number
+  residual_cents: number
   principal_paid_cents: number
   balance_cents: number
   by_type: LoanTypeTotal[]
@@ -533,6 +538,7 @@ export interface LoanDetailsInput {
   loan_type: string
   lender: string
   original_principal: string
+  residual: string
   rate: string
   is_interest_bearing: boolean
   min_payment: string

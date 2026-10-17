@@ -164,6 +164,7 @@ function LoanTile({ loan }: { loan: Loan }) {
       <span className="tile-meta">
         {payoffPct(loan)}% paid off
         {loan.min_payment_cents ? ` · ${formatMoney(loan.min_payment_cents)}/mo` : ''}
+        {loan.residual_cents > 0 ? ` · ${formatMoney(loan.residual_cents)} balloon` : ''}
       </span>
     </Link>
   )
@@ -394,6 +395,12 @@ export default function LoansPage() {
                 <span className="muted small">Original</span>
                 <b>{formatMoney(totals.original_cents)}</b>
               </div>
+              {totals.residual_cents > 0 && (
+                <div>
+                  <span className="muted small">Balloons</span>
+                  <b>{formatMoney(totals.residual_cents)}</b>
+                </div>
+              )}
               <div>
                 <span className="muted small">Paid off</span>
                 <b>{formatMoney(totals.principal_paid_cents)}</b>

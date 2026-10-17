@@ -97,6 +97,7 @@ def loan_out(
     details = account.loan
     owed = owed_cents(account, balance_cents)
     original = details.original_principal_cents if details else 0
+    residual = details.residual_cents if details else 0
     basis = original if original > 0 else abs(account.opening_balance_cents)
     paid = max(0, basis - owed) if basis > 0 else 0
     loan_type = details.loan_type if details else ""
@@ -117,6 +118,8 @@ def loan_out(
         "loan_type_label": labels.get(loan_type, loan_type or "—"),
         "lender": details.lender if details else "",
         "original_principal_cents": original,
+        "residual_cents": residual,
+        "amortizing_owed_cents": max(0, owed - residual),
         "principal_basis_cents": basis,
         "principal_paid_cents": paid,
         "payoff_pct": round(min(100.0, paid / basis * 100), 1) if basis > 0 else 0.0,
@@ -191,6 +194,7 @@ def totals(rows: list[dict]) -> dict:
         "owed_cents": owed,
         "count": len(rows),
         "original_cents": sum(r["original_principal_cents"] for r in rows),
+        "residual_cents": sum(r["residual_cents"] for r in rows),
         "principal_paid_cents": sum(r["principal_paid_cents"] for r in rows),
         "balance_cents": sum(r["balance_cents"] for r in rows),
         "by_type": sorted(by_type.values(), key=lambda e: (-e["owed_cents"], e["label"])),

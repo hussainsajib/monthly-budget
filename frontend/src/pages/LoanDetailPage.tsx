@@ -65,6 +65,20 @@ export default function LoanDetailPage() {
                 <span className="muted small">Owed</span>
                 <b>{formatMoney(loan.owed_cents)}</b>
               </div>
+              {loan.residual_cents > 0 && (
+                <div>
+                  <span className="muted small">Residual / balloon</span>
+                  <b>{formatMoney(loan.residual_cents)}</b>
+                  <span className="small muted">due at the end</span>
+                </div>
+              )}
+              {loan.residual_cents > 0 && (
+                <div>
+                  <span className="muted small">To pay down</span>
+                  <b>{formatMoney(loan.amortizing_owed_cents)}</b>
+                  <span className="small muted">owed minus the residual</span>
+                </div>
+              )}
               <div>
                 <span className="muted small">Original principal</span>
                 <b>{formatMoney(loan.original_principal_cents)}</b>

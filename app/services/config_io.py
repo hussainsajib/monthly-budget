@@ -55,6 +55,7 @@ def _loan_dict(details: LoanDetails | None) -> dict | None:
         "loan_type": details.loan_type,
         "lender": details.lender,
         "original_principal_cents": details.original_principal_cents,
+        "residual_cents": details.residual_cents,
         "rate_bps": details.rate_bps,
         "is_interest_bearing": details.is_interest_bearing,
         "min_payment_cents": details.min_payment_cents,
@@ -75,6 +76,7 @@ def _apply_loan(account: Account, entry: dict | None) -> None:
     details.loan_type = str(entry.get("loan_type", ""))[:20]
     details.lender = str(entry.get("lender", ""))[:80]
     details.original_principal_cents = int(entry.get("original_principal_cents", 0))
+    details.residual_cents = int(entry.get("residual_cents", 0))
     details.rate_bps = int(entry.get("rate_bps", 0))
     details.is_interest_bearing = bool(entry.get("is_interest_bearing", False))
     details.min_payment_cents = int(entry.get("min_payment_cents", 0))

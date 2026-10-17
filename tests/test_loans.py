@@ -124,6 +124,38 @@ def test_totals_group_by_loan_type(client, make_loan):
     assert by_type["auto"]["count"] == 1 and by_type["personal"]["count"] == 1
 
 
+def test_residual_is_carried_and_reported_separately(client, ids, make_loan):
+    _, accs = ids
+    account_id = make_loan(
+        name="Leased Car",
+        owed="25800",
+        details={"loan_type": "auto", "original_principal": "25800", "residual": "15000"},
+    )
+    loan = _loan(client, account_id)
+    assert loan["owed_cents"] == 2_580_000
+    assert loan["residual_cents"] == 1_500_000
+    assert loan["amortizing_owed_cents"] == 1_080_000
+
+    client.post(
+        f"/api/loans/{account_id}/payments",
+        json={"from_account_id": accs["Chequing"], "amount": "450", "date": "2026-02-01"},
+    )
+    loan = _loan(client, account_id)
+    assert loan["owed_cents"] == 2_535_000
+    assert loan["amortizing_owed_cents"] == 1_035_000
+    assert loan["payoff_pct"] < 10.0
+
+    data = client.get("/api/loans").json()
+    row = next(r for r in data["items"] if r["account_id"] == account_id)
+    assert row["residual_cents"] == 1_500_000
+    assert data["totals"]["residual_cents"] >= 1_500_000
+
+
+def test_residual_cannot_exceed_or_be_negative(client):
+    assert client.post("/api/loans", json={**BASE, "details": {"residual": "999999"}}).status_code == 400
+    assert client.post("/api/loans", json={**BASE, "details": {"residual": "-1"}}).status_code == 400
+
+
 def test_disbursement_lands_in_destination_without_double_counting(client, ids, make_loan):
     _, accs = ids
     chequing = accs["Chequing"]
