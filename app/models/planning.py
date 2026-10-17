@@ -18,6 +18,10 @@ class RecurringTemplate(Base):
     description: Mapped[str] = mapped_column(String(200))
     category_id: Mapped[int] = mapped_column(ForeignKey("categories.id", ondelete="CASCADE"))
     account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"))
+    # When set, this template schedules a payment into that loan: amount flows from ``account_id``
+    # into the loan. It is still a commitment (it never writes a ledger row) and it is kept out of
+    # budgets because its category is forced to the hidden transfer category.
+    loan_account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"))
     amount_cents: Mapped[int] = mapped_column(Integer)
     day_of_month: Mapped[int] = mapped_column(Integer)  # legacy monthly day; clamped to month length on use
     # Flexible recurrence. None = monthly on day_of_month. See app.services.recurring for the format.
@@ -25,7 +29,8 @@ class RecurringTemplate(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     category: Mapped[Category] = relationship(lazy="joined")
-    account: Mapped[Account | None] = relationship(lazy="joined")
+    account: Mapped[Account | None] = relationship(lazy="joined", foreign_keys=[account_id])
+    loan_account: Mapped[Account | None] = relationship(lazy="joined", foreign_keys=[loan_account_id])
 
 
 class AppSetting(Base):

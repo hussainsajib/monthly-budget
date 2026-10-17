@@ -30,6 +30,7 @@ from app.services.categories import MAX_DEPTH, Node, load_tree
 from app.services.category_config import ensure_category_config, type_keys
 from app.services.loan_config import ensure_loan_config
 from app.services.recurring import list_templates, validate_schedule
+from app.services.transfers import ensure_transfer_category
 
 FORMAT_VERSION = 1
 Path = tuple[str, ...]
@@ -125,6 +126,7 @@ def export_config(db: Session) -> dict:
             "description": t.description,
             "category": path_of[t.category_id],
             "account": t.account.name if t.account else None,
+            "loan": t.loan_account.name if t.loan_account else None,
             "amount_cents": t.amount_cents,
             "day_of_month": t.day_of_month,
             "schedule": t.schedule,
@@ -275,15 +277,25 @@ def _apply(db: Session, data: dict) -> dict[str, int]:
     existing = {(t.description.lower(), t.category_id): t for t in db.scalars(select(RecurringTemplate)).unique()}
     for entry in data.get("recurring", []):
         _require(entry, ("description", "category", "amount_cents", "day_of_month"), "recurring item")
-        cat = category_for(entry["category"], f"recurring item {entry['description']!r}")
         account_name = entry.get("account")
         if account_name is not None and account_name not in accounts:
             raise ConfigError(f"recurring item {entry['description']!r}: unknown account {account_name!r}")
+        loan_name = entry.get("loan")
+        if loan_name is not None:
+            if loan_name not in accounts:
+                raise ConfigError(f"recurring item {entry['description']!r}: unknown loan {loan_name!r}")
+            if accounts[loan_name].kind != "debt":
+                raise ConfigError(f"recurring item {entry['description']!r}: {loan_name!r} is not a loan")
+            # A loan payment lives on the hidden transfer category, which is not part of the file.
+            cat = ensure_transfer_category(db, commit=False)
+        else:
+            cat = category_for(entry["category"], f"recurring item {entry['description']!r}")
         tpl = existing.get((entry["description"].lower(), cat.id))
         if tpl is None:
             tpl = RecurringTemplate(description=entry["description"], category_id=cat.id)
             db.add(tpl)
         tpl.account_id = accounts[account_name].id if account_name else None
+        tpl.loan_account_id = accounts[loan_name].id if loan_name else None
         tpl.amount_cents = int(entry["amount_cents"])
         tpl.day_of_month = int(entry.get("day_of_month", 1))
         tpl.schedule = validate_schedule(entry["schedule"]) if entry.get("schedule") is not None else None

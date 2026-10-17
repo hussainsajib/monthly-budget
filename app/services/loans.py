@@ -19,13 +19,14 @@ from datetime import date
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import Account, LoanDetails, Transaction
+from app.models import Account, LoanDetails, RecurringTemplate, Transaction
 from app.models.ledger import signed_delta
 from app.services import transfers as transfer_service
 from app.services.balances import balance_deltas
 from app.services.cashflow import build_ledger
 from app.services.category_config import income_keys
 from app.services.loan_config import get_loan_types
+from app.services.recurring import occurrences
 from app.services.reference import list_accounts
 
 LOAN_KIND = "debt"
@@ -85,6 +86,57 @@ def _next_month(d: date) -> tuple[int, int]:
     return (d.year + 1, 1) if d.month == 12 else (d.year, d.month + 1)
 
 
+def _schedule_of(tpl: RecurringTemplate) -> dict:
+    return tpl.schedule if tpl.schedule is not None else {
+        "freq": "monthly",
+        "interval": 1,
+        "start": "2000-01-01",
+        "by_month_day": [tpl.day_of_month],
+    }
+
+
+def _next_occurrence(schedule: dict, today: date) -> date | None:
+    year, month = today.year, today.month
+    for _ in range(13):
+        for when in occurrences(schedule, year, month):
+            if when >= today:
+                return when
+        year, month = _next_month(date(year, month, 1))
+    return None
+
+
+def scheduled_payments(
+    db: Session, account_ids: set[int], today: date | None = None
+) -> dict[int, dict]:
+    """The nearest upcoming payment commitment per loan, from recurring items linked to it."""
+    if not account_ids:
+        return {}
+    today = today or date.today()
+    templates = db.scalars(
+        select(RecurringTemplate).where(
+            RecurringTemplate.loan_account_id.in_(account_ids),
+            RecurringTemplate.is_active.is_(True),
+        )
+    ).unique()
+    best: dict[int, dict] = {}
+    for tpl in templates:
+        when = _next_occurrence(_schedule_of(tpl), today)
+        if when is None or tpl.loan_account_id is None:
+            continue
+        current = best.get(tpl.loan_account_id)
+        if current is not None and date.fromisoformat(current["date"]) <= when:
+            continue
+        best[tpl.loan_account_id] = {
+            "recurring_template_id": tpl.id,
+            "description": tpl.description,
+            "amount_cents": abs(tpl.amount_cents),
+            "date": when.isoformat(),
+            "from_account_id": tpl.account_id,
+            "from_account_name": tpl.account.name if tpl.account else None,
+        }
+    return best
+
+
 def _type_labels(db: Session) -> dict[str, str]:
     return {t.key: t.label for t in get_loan_types(db)}
 
@@ -94,6 +146,7 @@ def loan_out(
     balance_cents: int,
     labels: dict[str, str],
     stats: LoanStats | None = None,
+    schedule: dict | None = None,
 ) -> dict:
     stats = stats or LoanStats()
     details = account.loan
@@ -137,6 +190,7 @@ def loan_out(
         "notes": details.notes if details else "",
         "transaction_count": stats.transaction_count,
         "last_activity": stats.last_activity.isoformat() if stats.last_activity else None,
+        "schedule": schedule,
     }
 
 
@@ -157,9 +211,16 @@ def loan_summaries(db: Session, include_inactive: bool = True) -> list[dict]:
     todays = date.today()
     deltas = balance_deltas(db, {a.id for a in accounts}, as_of=todays)
     stats = _stats_for(db, {a.id for a in accounts})
+    schedules = scheduled_payments(db, {a.id for a in accounts}, today=todays)
     labels = _type_labels(db)
     return [
-        loan_out(a, a.opening_balance_cents + deltas.get(a.id, 0), labels, stats.get(a.id))
+        loan_out(
+            a,
+            a.opening_balance_cents + deltas.get(a.id, 0),
+            labels,
+            stats.get(a.id),
+            schedules.get(a.id),
+        )
         for a in accounts
     ]
 

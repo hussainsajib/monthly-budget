@@ -38,12 +38,14 @@ def ensure_transfer_section(db: Session) -> Category:
     return section
 
 
-def ensure_transfer_category(db: Session) -> Category:
+def ensure_transfer_category(db: Session, *, commit: bool = True) -> Category:
     """The "Between accounts" leaf every transfer leg points at.
 
     ``kind == transfer`` makes it neither income nor expense, so budgets and reports exclude it
     whether a leg is a pending import (no ``transfer_id`` yet) or part of a connected pair. It is
     active/visible so an importer can tag a row as a transfer and connect the counterpart later.
+
+    ``commit=False`` lets a caller build the category inside its own transaction (config import).
     """
     section = ensure_transfer_section(db)
     leaf = db.scalars(
@@ -52,7 +54,10 @@ def ensure_transfer_category(db: Session) -> Category:
     if leaf is None:
         leaf = Category(name=CATEGORY_NAME, parent_id=section.id, kind=TRANSFER, is_active=True, sort_order=10_000)
         db.add(leaf)
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
     leaf.is_active = True
     return leaf
 

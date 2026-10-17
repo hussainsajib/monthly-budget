@@ -417,10 +417,12 @@ def get_loan(account_id: int, db: Session = Depends(get_db)):
     ensure_loan_config(db)
     account = _loan_or_404(db, account_id)
     deltas = balance_deltas(db, {account.id})
+    schedule = loan_service.scheduled_payments(db, {account.id}).get(account.id)
     row = loan_service.loan_out(
         account,
         account.opening_balance_cents + deltas.get(account.id, 0),
         {t.key: t.label for t in get_loan_types(db)},
+        schedule=schedule,
     )
     row["history"] = loan_service.history(db, account)
     return row
@@ -811,8 +813,9 @@ def update_transfer(transfer_id: str, body: TransferBody, db: Session = Depends(
 
 class RecurringBody(BaseModel):
     description: str
-    category_id: int
+    category_id: int | None = None
     account_id: int | None = None
+    loan_account_id: int | None = None
     amount: str
     day_of_month: int = 1
     schedule: dict | None = None
@@ -828,6 +831,8 @@ def _recurring_out(t: RecurringTemplate, tree: CategoryTree, income: set[str]) -
         "is_income": bool(t.category and t.category.kind in income),
         "account_id": t.account_id,
         "account_name": t.account.name if t.account else None,
+        "loan_account_id": t.loan_account_id,
+        "loan_name": t.loan_account.name if t.loan_account else None,
         "amount_cents": t.amount_cents,
         "day_of_month": t.day_of_month,
         "schedule": t.schedule,
@@ -849,9 +854,9 @@ def _sort_recurring(rows: list[dict], sort: str, desc: bool) -> list[dict]:
     return sorted(rows, key=keys[sort], reverse=desc)
 
 
-def _apply_recurring(tpl: RecurringTemplate, body: RecurringBody) -> None:
+def _apply_recurring(db: Session, tpl: RecurringTemplate, body: RecurringBody) -> None:
     if not body.description.strip():
-        raise ValueError("Description and category are required")
+        raise ValueError("A description is required")
     if body.schedule is not None:
         tpl.schedule = validate_schedule(body.schedule)
     else:
@@ -860,10 +865,24 @@ def _apply_recurring(tpl: RecurringTemplate, body: RecurringBody) -> None:
         tpl.schedule = None
     tpl.day_of_month = body.day_of_month
     tpl.description = body.description.strip()
-    tpl.category_id = body.category_id
     tpl.account_id = body.account_id
     tpl.amount_cents = to_cents(body.amount)
     tpl.is_active = body.is_active
+    if body.loan_account_id is None:
+        if body.category_id is None:
+            raise ValueError("Pick a category")
+        tpl.loan_account_id = None
+        tpl.category_id = body.category_id
+        return
+    loan = db.get(Account, body.loan_account_id)
+    if loan is None or not loan_service.is_loan(loan):
+        raise ValueError("Choose a loan to pay")
+    if loan.id == body.account_id:
+        raise ValueError("A payment cannot come from the loan itself")
+    # A loan payment is a transfer, so it belongs to the hidden transfer category: that keeps it out
+    # of budgets and reports while still showing as a commitment on the loan.
+    tpl.category_id = transfer_service.ensure_transfer_category(db).id
+    tpl.loan_account_id = loan.id
 
 
 @router.get("/recurring")
@@ -880,7 +899,7 @@ def get_recurring(sort: str = "description", dir: str = "asc", db: Session = Dep
 def create_recurring(body: RecurringBody, db: Session = Depends(get_db)):
     tpl = RecurringTemplate()
     with user_errors():
-        _apply_recurring(tpl, body)
+        _apply_recurring(db, tpl, body)
     db.add(tpl)
     db.commit()
     return {"id": tpl.id}
@@ -892,7 +911,7 @@ def update_recurring(tpl_id: int, body: RecurringBody, db: Session = Depends(get
     if tpl is None:
         raise HTTPException(404, "Template not found")
     with user_errors():
-        _apply_recurring(tpl, body)
+        _apply_recurring(db, tpl, body)
     db.commit()
     return {"id": tpl.id}
 

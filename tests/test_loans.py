@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 
 from app.models import Account, LoanDetails
@@ -332,6 +334,58 @@ def test_only_a_money_out_row_can_become_a_payment(client, ids, make_loan):
     assert client.post(
         f"/api/loans/{account_id}/payments/from-transaction", json={"txn_id": 999999}
     ).status_code == 404
+
+
+def test_a_recurring_item_can_schedule_a_loan_payment(client, ids, make_loan):
+    cats, accs = ids
+    loan_id = make_loan(name="Lease", owed="25800")
+    chequing = accs["Chequing"]
+    body = {
+        "description": "Lease payment",
+        "account_id": chequing,
+        "loan_account_id": loan_id,
+        "amount": "450",
+        "day_of_month": 15,
+        "schedule": {"freq": "monthly", "interval": 1, "start": "2026-01-15", "by_month_day": [15]},
+    }
+    res = client.post("/api/recurring", json=body)
+    assert res.status_code == 201, res.text
+    tpl_id = res.json()["id"]
+    try:
+        row = next(t for t in client.get("/api/recurring").json() if t["id"] == tpl_id)
+        assert row["loan_account_id"] == loan_id and row["loan_name"] == "Lease"
+        assert row["account_id"] == chequing
+        assert row["category_path"] == "Transfer \u203a Between accounts"  # a payment is a transfer
+        assert row["is_income"] is False
+
+        # The loan surfaces the next payment, ready to pre-fill the Record payment form.
+        schedule = _loan(client, loan_id)["schedule"]
+        assert schedule["amount_cents"] == 45_000
+        assert schedule["from_account_id"] == chequing
+        assert schedule["recurring_template_id"] == tpl_id
+        assert schedule["date"] >= date.today().isoformat()
+
+        # It is a transfer, so it never shows up as a budget commitment.
+        month = date.today().strftime("%Y-%m")
+        lines = client.get("/api/budget", params={"month": month}).json()["lines"]
+        transfer_lines = [ln for ln in lines if ln["kind"] == "transfer"]
+        assert all(ln["recurring_cents"] == 0 for ln in transfer_lines)
+    finally:
+        client.delete(f"/api/recurring/{tpl_id}")
+
+
+def test_a_loan_payment_recurring_item_needs_a_real_loan(client, ids, make_loan):
+    _, accs = ids
+    base = {"description": "Pay", "account_id": accs["Chequing"], "amount": "10", "day_of_month": 1}
+    not_a_loan = client.post("/api/recurring", json={**base, "loan_account_id": accs["Savings"]})
+    assert not_a_loan.status_code == 400
+    loan_id = make_loan()
+    from_itself = client.post(
+        "/api/recurring", json={**base, "account_id": loan_id, "loan_account_id": loan_id}
+    )
+    assert from_itself.status_code == 400
+    no_category = client.post("/api/recurring", json=base)
+    assert no_category.status_code == 400
 
 
 def test_history_and_trend_track_the_balance(client, ids, make_loan):
