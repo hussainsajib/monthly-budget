@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.core.money import to_cents
 from app.db.session import get_db
-from app.models import REIMBURSEMENT, TRANSFER, Account, Category, ImportRule, RecurringTemplate, Transaction
+from app.models import REIMBURSEMENT, TRANSFER, Account, ImportRule, RecurringTemplate, Transaction
 from app.schemas.transaction import TransactionInput
 from app.services import budgets, import_rules, importing, integrity, reports
 from app.services import categories as category_service
@@ -26,7 +26,7 @@ from app.services import reimbursements as reimbursement_service
 from app.services import transactions as txn_service
 from app.services import transfers as transfer_service
 from app.services.account_config import account_type_keys, ensure_account_config, get_account_types
-from app.services.balances import balance_deltas, delta_expression
+from app.services.balances import balance_deltas
 from app.services.cashflow import build_ledger
 from app.services.categories import CategoryTree
 from app.services.category_config import (
@@ -216,22 +216,12 @@ def _sort_accounts(rows: list[dict], sort: str, desc: bool) -> list[dict]:
 
 
 def _account_stats(db: Session) -> dict[int, dict]:
-    """Per-account: balance change up to today, transaction count, and total transacted."""
-    today = date.today()
-    income = income_keys(db)
-    deltas = dict(
-        db.execute(
-            select(
-                Transaction.account_id,
-                func.sum(
-                    delta_expression(income)
-                ),
-            )
-            .join(Category, Transaction.category_id == Category.id)
-            .where(Transaction.account_id.is_not(None), Transaction.date <= today)
-            .group_by(Transaction.account_id)
-        ).all()
-    )
+    """Per-account: balance change up to today, transaction count, and total transacted.
+
+    The balance change comes from the shared rule (so it respects ``opening_date``); the count and
+    activity columns stay informational over every row the account ever held.
+    """
+    deltas = balance_deltas(db, as_of=date.today())
     rows = db.execute(
         select(
             Transaction.account_id,
@@ -577,10 +567,10 @@ def _txn_out(t: Transaction, tree: CategoryTree, peer: Transaction | None = None
         "notes": t.notes,
         "recurring_template_id": t.recurring_template_id,
         "recurring_description": t.recurring_template.description if t.recurring_template else None,
-        "transfer_id": t.transfer_id,
+        "transfer_id": t.link_id if t.link_kind == TRANSFER else None,
         "transfer_account_id": peer.account_id if peer else None,
         "transfer_account_name": peer.account.name if peer and peer.account else None,
-        "reimbursement_id": t.reimbursement_id,
+        "reimbursement_id": t.link_id if t.link_kind == REIMBURSEMENT else None,
         "reimbursement_account_id": peer.account_id if peer else None,
         "reimbursement_account_name": peer.account.name if peer and peer.account else None,
         "planned": t.date > date.today(),
@@ -588,21 +578,18 @@ def _txn_out(t: Transaction, tree: CategoryTree, peer: Transaction | None = None
 
 
 def _peer_lookup(db: Session, txns: list[Transaction]) -> dict[int, Transaction]:
-    """Other leg of each transfer / reimbursement, keyed by transaction id, for the rows on this page."""
+    """Other leg of each pairing (transfer or reimbursement), keyed by transaction id, for this page."""
     peers: dict[int, Transaction] = {}
-    for key_attr, legs_for in (
-        ("transfer_id", transfer_service.legs_for),
-        ("reimbursement_id", reimbursement_service.legs_for),
-    ):
-        ids = {getattr(t, key_attr) for t in txns if getattr(t, key_attr) is not None}
-        by_group: dict[str, dict[int, Transaction]] = {}
-        for leg in legs_for(db, ids):
-            by_group.setdefault(getattr(leg, key_attr), {})[leg.id] = leg
-        for t in txns:
-            gid = getattr(t, key_attr)
-            if gid is None:
-                continue
-            peers[t.id] = next((leg for leg_id, leg in by_group[gid].items() if leg_id != t.id), None)
+    link_ids = {t.link_id for t in txns if t.link_id is not None}
+    if not link_ids:
+        return peers
+    by_group: dict[str, dict[int, Transaction]] = {}
+    for leg in db.scalars(select(Transaction).where(Transaction.link_id.in_(link_ids))).unique():
+        by_group.setdefault(leg.link_id or "", {})[leg.id] = leg
+    for t in txns:
+        group = by_group.get(t.link_id or "")
+        if group:
+            peers[t.id] = next((leg for leg_id, leg in group.items() if leg_id != t.id), None)
     return peers
 
 
@@ -708,12 +695,12 @@ def update_transaction(txn_id: int, body: TransactionBody, db: Session = Depends
 @router.delete("/transactions/{txn_id}", status_code=204)
 def delete_transaction(txn_id: int, db: Session = Depends(get_db)):
     txn = _get_txn(db, txn_id)
-    if txn.transfer_id is not None:
-        transfer_service.delete_transfer(db, txn.transfer_id)  # deleting one leg removes both
-    elif txn.reimbursement_id is not None:
-        reimbursement_service.un_pair(db, txn)  # delete the leg, release the other as a normal row
-    else:
+    if txn.link_id is None:
         txn_service.delete_transaction(db, txn)
+    elif txn.link_kind == TRANSFER:
+        transfer_service.delete_transfer(db, txn.link_id)  # deleting one leg removes both
+    else:
+        reimbursement_service.un_pair(db, txn)  # delete the leg, release the other as a normal row
     return Response(status_code=204)
 
 
@@ -815,7 +802,7 @@ class RecurringBody(BaseModel):
     description: str
     category_id: int | None = None
     account_id: int | None = None
-    loan_account_id: int | None = None
+    to_account_id: int | None = None
     amount: str
     day_of_month: int = 1
     schedule: dict | None = None
@@ -831,8 +818,8 @@ def _recurring_out(t: RecurringTemplate, tree: CategoryTree, income: set[str]) -
         "is_income": bool(t.category and t.category.kind in income),
         "account_id": t.account_id,
         "account_name": t.account.name if t.account else None,
-        "loan_account_id": t.loan_account_id,
-        "loan_name": t.loan_account.name if t.loan_account else None,
+        "to_account_id": t.to_account_id,
+        "to_name": t.to_account.name if t.to_account else None,
         "amount_cents": t.amount_cents,
         "day_of_month": t.day_of_month,
         "schedule": t.schedule,
@@ -868,13 +855,13 @@ def _apply_recurring(db: Session, tpl: RecurringTemplate, body: RecurringBody) -
     tpl.account_id = body.account_id
     tpl.amount_cents = to_cents(body.amount)
     tpl.is_active = body.is_active
-    if body.loan_account_id is None:
+    if body.to_account_id is None:
         if body.category_id is None:
             raise ValueError("Pick a category")
-        tpl.loan_account_id = None
+        tpl.to_account_id = None
         tpl.category_id = body.category_id
         return
-    loan = db.get(Account, body.loan_account_id)
+    loan = db.get(Account, body.to_account_id)
     if loan is None or not loan_service.is_loan(loan):
         raise ValueError("Choose a loan to pay")
     if loan.id == body.account_id:
@@ -882,7 +869,7 @@ def _apply_recurring(db: Session, tpl: RecurringTemplate, body: RecurringBody) -
     # A loan payment is a transfer, so it belongs to the hidden transfer category: that keeps it out
     # of budgets and reports while still showing as a commitment on the loan.
     tpl.category_id = transfer_service.ensure_transfer_category(db).id
-    tpl.loan_account_id = loan.id
+    tpl.to_account_id = loan.id
 
 
 @router.get("/recurring")

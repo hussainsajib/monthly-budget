@@ -127,9 +127,8 @@ def budget_report(db: Session, window_months: int = WINDOW_MONTHS, as_of: date |
         .where(
             Transaction.date >= window[0],
             Transaction.date <= as_of,
-            Transaction.transfer_id.is_(None),  # transfers are not income or expense
+            Transaction.link_id.is_(None),  # paired transfers/reimbursements are not income or expense
             ~Transaction.category.has(Category.kind == TRANSFER),  # pending transfer legs neither
-            Transaction.reimbursement_id.is_(None),  # connected reimbursements are not income or expense
         )
         .group_by(Transaction.category_id, year, month)
     )

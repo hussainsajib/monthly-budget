@@ -1,8 +1,9 @@
 """Reimbursements: a payable expense matched with its later repayment.
 
 You pay for something on someone's behalf (an ordinary expense that COUNTS in your budget); later
-they pay you back. When the two rows are connected they share a ``reimbursement_id`` and are both
-excluded from budgets and reports, so fully-reimbursed spending nets to zero. Until then the outlay
+they pay you back. When the two rows are connected they share a ``link_id`` (``link_kind ==
+reimbursement``) and are both excluded from budgets and reports, so fully-reimbursed spending nets
+to zero. Until then the outlay
 stays a normal expense and any repayment you've received reads as a refund on the same category.
 """
 
@@ -67,19 +68,11 @@ def ensure_reimbursement_category(db: Session) -> Category:
     return leaf
 
 
-def is_paired(txn: Transaction) -> bool:
-    return txn.reimbursement_id is not None
-
-
-def legs(db: Session, reimbursement_id: str) -> list[Transaction]:
-    return list(db.scalars(select(Transaction).where(Transaction.reimbursement_id == reimbursement_id)))
-
-
-def legs_for(db: Session, reimbursement_ids: set[str]) -> list[Transaction]:
-    if not reimbursement_ids:
-        return []
+def legs(db: Session, link_id: str) -> list[Transaction]:
     return list(
-        db.scalars(select(Transaction).where(Transaction.reimbursement_id.in_(reimbursement_ids))).unique()
+        db.scalars(
+            select(Transaction).where(Transaction.link_id == link_id, Transaction.link_kind == REIMBURSEMENT)
+        )
     )
 
 
@@ -91,7 +84,7 @@ def connect(db: Session, first: Transaction, second: Transaction) -> str:
     """
     if first.id == second.id:
         raise ReimbursementError("Pick two different transactions")
-    if first.reimbursement_id is not None or second.reimbursement_id is not None:
+    if first.link_id is not None or second.link_id is not None:
         raise ReimbursementError("One of those is already part of a reimbursement")
     if first.category.kind != REIMBURSEMENT or second.category.kind != REIMBURSEMENT:
         raise ReimbursementError("Both rows must be tagged as a reimbursement")
@@ -99,20 +92,22 @@ def connect(db: Session, first: Transaction, second: Transaction) -> str:
         raise ReimbursementError("The two amounts must match")
     if (first.amount_cents < 0) == (second.amount_cents < 0):
         raise ReimbursementError("One row must be the outlay and the other the repayment")
-    reimbursement_id = str(uuid.uuid4())
+    link_id = str(uuid.uuid4())
     for txn in (first, second):
-        txn.reimbursement_id = reimbursement_id
+        txn.link_id = link_id
+        txn.link_kind = REIMBURSEMENT
     db.commit()
-    return reimbursement_id
+    return link_id
 
 
 def un_pair(db: Session, leg: Transaction) -> None:
     """Delete ``leg`` and release its partner back to a normal (unpaired) transaction."""
     partner = None
-    if leg.reimbursement_id is not None:
-        pair = legs(db, leg.reimbursement_id)
+    if leg.link_id is not None:
+        pair = legs(db, leg.link_id)
         partner = next((t for t in pair if t.id != leg.id), None)
     db.delete(leg)
     if partner is not None:
-        partner.reimbursement_id = None
+        partner.link_id = None
+        partner.link_kind = None
     db.commit()

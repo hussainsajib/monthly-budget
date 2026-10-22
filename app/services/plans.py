@@ -14,12 +14,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.money import to_cents
-from app.models import REIMBURSEMENT, TRANSFER, Account, Plan, PlanItem, RecurringTemplate, Transaction
+from app.models import TRANSFER, Account, Category, Plan, PlanItem, RecurringTemplate, Transaction
+from app.models.ledger import direction_effect, direction_of
 from app.services import budgets, plan_types
-from app.services.cashflow import build_ledger
+from app.services.cashflow import balance_at, build_ledger
 from app.services.categories import load_tree
 from app.services.category_config import income_keys
-from app.services.recurring import occurrences
+from app.services.events import ledger_events, manual_events, recurring_events, to_public
 
 MATCH_WINDOW_DAYS = 5
 DEFAULT_LOOKAHEAD = 2
@@ -60,6 +61,13 @@ def normalize_config(plan_type: plan_types.PlanType, raw: dict | None) -> dict:
         elif spec.kind == "select":
             allowed = {k for k, _ in spec.options}
             out[spec.key] = value if value in allowed else (spec.options[0][0] if spec.options else None)
+        elif spec.kind == "categories":
+            out[spec.key] = []
+            for item in value if isinstance(value, list) else []:
+                try:
+                    out[spec.key].append(int(item))
+                except (TypeError, ValueError):
+                    continue
         elif spec.kind in ("category", "paycheck"):
             out[spec.key] = int(value) if value not in (None, "") else None
         else:
@@ -181,14 +189,14 @@ def _item_kind(plan_type: plan_types.PlanType, item_kind: str) -> str:
 def create_item(db: Session, plan: Plan, **fields) -> PlanItem:
     plan_type = plan_types.get_type(plan.type)
     next_sort = (db.scalar(select(func.max(PlanItem.sort_order)).where(PlanItem.plan_id == plan.id)) or 0) + 10
+    direction = fields.get("direction") if fields.get("direction") in ("in", "out") else "out"
     item = PlanItem(
         plan_id=plan.id,
         date=fields.get("date"),
         description=(fields.get("description") or "").strip()[:200],
         category_id=fields.get("category_id"),
         account_id=fields.get("account_id"),
-        amount_cents=max(int(fields.get("amount_cents") or 0), 0),
-        direction=fields.get("direction") if fields.get("direction") in ("in", "out") else "out",
+        amount_cents=direction_effect(abs(int(fields.get("amount_cents") or 0)), direction),
         item_kind=_item_kind(plan_type, fields.get("item_kind") or "custom"),
         source="manual",
         sort_order=next_sort,
@@ -213,10 +221,13 @@ def update_item(db: Session, item: PlanItem, **fields) -> PlanItem:
         item.category_id = fields.get("category_id")
     if "account_id" in fields:
         item.account_id = fields.get("account_id")
-    if "amount_cents" in fields:
-        item.amount_cents = max(int(fields.get("amount_cents") or 0), 0)
-    if "direction" in fields and fields.get("direction") in ("in", "out"):
-        item.direction = fields["direction"]
+    if "amount_cents" in fields or "direction" in fields:
+        # The API still speaks magnitude + direction; the row keeps the signed effect.
+        direction = (
+            fields["direction"] if fields.get("direction") in ("in", "out") else direction_of(item.amount_cents)
+        )
+        magnitude = abs(int(fields["amount_cents"])) if "amount_cents" in fields else abs(item.amount_cents)
+        item.amount_cents = direction_effect(magnitude, direction)
     if "item_kind" in fields:
         item.item_kind = _item_kind(plan_type, fields.get("item_kind") or "custom")
     db.commit()
@@ -238,96 +249,48 @@ def delete_item(db: Session, item: PlanItem) -> None:
 # --------------------------------------------------------------- derivation
 
 
-def _signed(amount_cents: int, direction: str) -> int:
-    return amount_cents if direction == "in" else -amount_cents
-
-
-def _manual_events(plan: Plan, tree) -> list[dict]:
-    events = []
-    for item in plan.items:
-        events.append(
-            {
-                "item_id": item.id,
-                "date": item.date,
-                "description": item.description or (item.category.name if item.category else "Adjustment"),
-                "category_id": item.category_id,
-                "category_path": tree.path(item.category_id) if item.category_id else "",
-                "account_id": item.account_id,
-                "amount_cents": item.amount_cents,
-                "direction": item.direction,
-                "item_kind": item.item_kind,
-                "source": "manual",
-                "ref_id": None,
-                "matched_transaction_id": item.matched_transaction_id,
-            }
-        )
-    return events
-
-
-def _recurring_events(db: Session, start: date, end: date, *, paychecks_only: bool, tree=None) -> list[dict]:
-    income = income_keys(db)
-    events: list[dict] = []
-    for tpl in db.scalars(select(RecurringTemplate).where(RecurringTemplate.is_active.is_(True))):
-        kind = tpl.category.kind if tpl.category else "expense"
-        is_income = kind in income
-        if paychecks_only != is_income:
-            continue
-        if not is_income and kind in (TRANSFER, REIMBURSEMENT):
-            continue
-        schedule = (
-            tpl.schedule
-            if tpl.schedule is not None
-            else {"freq": "monthly", "interval": 1, "start": "2000-01-01", "by_month_day": [tpl.day_of_month]}
-        )
-        for when in _occurrences_between(schedule, start, end):
-            events.append(
-                {
-                    "item_id": None,
-                    "date": when,
-                    "description": tpl.description,
-                    "category_id": tpl.category_id,
-                    "category_path": tree.path(tpl.category_id) if tree else "",
-                    "account_id": tpl.account_id,
-                    "amount_cents": abs(tpl.amount_cents),
-                    "direction": "in" if is_income else "out",
-                    "item_kind": "income" if is_income else "commitment",
-                    "source": "recurring",
-                    "ref_id": tpl.id,
-                    "matched_transaction_id": None,
-                }
-            )
-    return events
-
-
-def _occurrences_between(schedule: dict, start: date, end: date) -> list[date]:
-    """Occurrences of a schedule in [start, end]; rides on ``recurring.occurrences`` month by month."""
-    out: list[date] = []
-    cursor = date(start.year, start.month, 1)
-    while cursor <= end:
-        for when in occurrences(schedule, cursor.year, cursor.month):
-            if start <= when <= end:
-                out.append(when)
-        cursor = date(cursor.year + 1, 1, 1) if cursor.month == 12 else date(cursor.year, cursor.month + 1, 1)
-    return out
-
-
 def _config(plan: Plan) -> dict:
     return plan.config or {}
 
 
 def _paychecks(db: Session, start: date, lookahead: int, template_id: int | None = None) -> list[date]:
     horizon = start + timedelta(days=HORIZON_DAYS)
-    events = _recurring_events(db, start, horizon, paychecks_only=True)
+    events = recurring_events(db, start, horizon, income_only=True)
     if template_id is not None:
         events = [e for e in events if e["ref_id"] == template_id]
     dates = sorted({e["date"] for e in events})
     return dates[:lookahead]
 
 
+def _variable_spending(db: Session, config: dict, start: date, end: date) -> int:
+    """Budgeted-but-unscheduled spending (groceries, fuel, …) across the window.
+
+    Sums the selected leaf categories' default monthly budgets and multiplies by the number of
+    calendar months the window spans — budgets are monthly, so a longer window is simply more
+    months of spending.
+    """
+    ids = config.get("variable_category_ids") or []
+    if not ids:
+        return 0
+    total = db.scalar(select(func.sum(Category.monthly_budget_cents)).where(Category.id.in_(ids))) or 0
+    months = (end.year - start.year) * 12 + (end.month - start.month) + 1
+    return int(total) * months
+
+
+def _inflow(events: list[dict]) -> int:
+    """Money in, read straight off the signed amounts."""
+    return sum(e["amount_cents"] for e in events if e["amount_cents"] > 0)
+
+
+def _outflow(events: list[dict]) -> int:
+    """Money out as a positive number, read straight off the signed amounts."""
+    return -sum(e["amount_cents"] for e in events if e["amount_cents"] < 0)
+
+
 def _apply_balance(events: list[dict], opening_cents: int) -> list[dict]:
     balance = opening_cents
     for event in events:
-        balance += _signed(event["amount_cents"], event["direction"])
+        balance += event["amount_cents"]
         event["balance_cents"] = balance
     return events
 
@@ -350,7 +313,7 @@ def _attach_balances(db: Session, plan: Plan, events: list[dict]) -> list[dict]:
             continue
         if event_account.id not in balances:
             balances[event_account.id] = build_ledger(db, event_account).current_balance_cents
-        balances[event_account.id] += _signed(event["amount_cents"], event["direction"])
+        balances[event_account.id] += event["amount_cents"]
         event["balance_cents"] = balances[event_account.id]
     return events
 
@@ -379,22 +342,50 @@ def derive_rolling(db: Session, plan: Plan, tree) -> dict:
     paychecks = _paychecks(db, start, lookahead, paycheck_id)
     end = plan.end_date or (paychecks[-1] if paychecks else start + timedelta(days=NO_PAYCHECK_FALLBACK_DAYS))
 
-    events = _recurring_events(db, start, end, paychecks_only=True, tree=tree)
-    events += _recurring_events(db, start, end, paychecks_only=False, tree=tree)
-    events += [e for e in _manual_events(plan, tree) if (e["date"] or start) <= end]
-    events.sort(key=lambda e: (e["date"] or start, e["source"] != "manual"))
-
     account = db.get(Account, plan.account_id) if plan.account_id else None
-    opening = build_ledger(db, account).current_balance_cents if account else 0
-    _apply_balance(events, opening)
 
-    inflow = sum(e["amount_cents"] for e in events if e["direction"] == "in")
-    outflow = sum(e["amount_cents"] for e in events if e["direction"] == "out")
-    lowest = min((e["balance_cents"] for e in events), default=opening)
+    # Forward-looking events drive the summary numbers (safe-to-spend, end balance). Rows dated today
+    # or earlier are already inside ``opening`` below, so the projection starts after them.
+    summary_events = recurring_events(db, start, end, income_only=True, tree=tree)
+    summary_events += recurring_events(db, start, end, income_only=False, tree=tree)
+    summary_events += [e for e in manual_events(plan, tree) if (e["date"] or start) <= end]
+    summary_events += ledger_events(db, start, end, after=today, account_id=plan.account_id, tree=tree)
+    summary_events.sort(key=lambda e: (e["date"] or start, e["source"] != "manual"))
+
+    opening = build_ledger(db, account).current_balance_cents if account else 0
+    _apply_balance(summary_events, opening)
+
+    inflow = _inflow(summary_events)
+    outflow = _outflow(summary_events)
+    variable = _variable_spending(db, config, start, end)
+    lowest = min((e["balance_cents"] for e in summary_events), default=opening)
+
+    # The window the user sees also spans the current month's already-passed dates, so a scheduled
+    # expense whose day has gone by still shows up - matched to the transaction that recorded it, or
+    # left "planned" when no such transaction exists yet. Income occurrences stay forward-looking;
+    # past income shows as the real transactions that recorded it.
+    window_start = plan.start_date or date(today.year, today.month, 1)
+    planned = recurring_events(db, start, end, income_only=True, tree=tree)
+    planned += recurring_events(db, window_start, end, income_only=False, tree=tree)
+    planned += [e for e in manual_events(plan, tree) if (e["date"] or start) <= end]
+    planned = _drift(db, planned)
+    matched_ids = {e["matched_transaction_id"] for e in planned if e.get("matched_transaction_id")}
+    leftovers = [
+        e
+        for e in ledger_events(db, window_start, end, account_id=plan.account_id, tree=tree)
+        if e["matched_transaction_id"] not in matched_ids
+    ]
+    for e in leftovers:
+        e["actual_cents"] = e["amount_cents"]
+        e["variance_cents"] = 0
+    window_events = planned + leftovers
+    _sort_events(window_events)
+    opening_window = balance_at(db, account, window_start - timedelta(days=1)) if account else 0
+    _apply_balance(window_events, opening_window)
 
     return {
         "kind": "rolling",
-        "window": {"start": start.isoformat(), "end": end.isoformat()},
+        "window": {"start": window_start.isoformat(), "end": end.isoformat()},
         "lookahead_paychecks": lookahead,
         "paycheck": (
             {
@@ -410,12 +401,14 @@ def derive_rolling(db: Session, plan: Plan, tree) -> dict:
         "inflow_cents": inflow,
         "outflow_cents": outflow,
         "net_cents": inflow - outflow,
+        "variable_spending_cents": variable,
+        "variable_category_count": len(config.get("variable_category_ids") or []),
         "buffer_cents": buffer_cents,
-        "safe_to_spend_cents": inflow - outflow - buffer_cents,
-        "end_balance_cents": events[-1]["balance_cents"] if events else opening,
+        "safe_to_spend_cents": inflow - outflow - variable - buffer_cents,
+        "end_balance_cents": summary_events[-1]["balance_cents"] if summary_events else opening,
         "lowest_balance_cents": lowest,
-        "headline_cents": inflow - outflow - buffer_cents,
-        "events": events,
+        "headline_cents": inflow - outflow - variable - buffer_cents,
+        "events": window_events,
     }
 
 
@@ -435,7 +428,7 @@ def derive_goal(db: Session, plan: Plan, tree) -> dict:
             )
         )
         funded += int(total or 0)
-    funded += sum(e["amount_cents"] for e in _manual_events(plan, tree) if e["item_kind"] == "contribution")
+    funded += sum(e["amount_cents"] for e in manual_events(plan, tree) if e["item_kind"] == "contribution")
 
     remaining = max(target - funded, 0)
     months = _months_between(date.today(), target_date) if target_date else None
@@ -473,15 +466,15 @@ def derive_debt(db: Session, plan: Plan, tree) -> dict:
         {
             "id": item.id,
             "name": item.description or (item.category.name if item.category else "Debt"),
-            "initial_cents": item.amount_cents,
-            "balance_cents": item.amount_cents,
+            "initial_cents": abs(item.amount_cents),
+            "balance_cents": abs(item.amount_cents),
             "interest_cents": 0,
             "payoff_month": None,
         }
         for item in plan.items
-        if item.item_kind == "debt" and item.amount_cents > 0
+        if item.item_kind == "debt" and item.amount_cents != 0
     ]
-    events = _manual_events(plan, tree)
+    events = manual_events(plan, tree)
     if not debts:
         return {
             "kind": "debt",
@@ -550,9 +543,9 @@ def derive_debt(db: Session, plan: Plan, tree) -> dict:
 def derive_event(db: Session, plan: Plan, tree) -> dict:
     config = _config(plan)
     budget_cents = int(config.get("budget_cents") or 0)
-    events = _manual_events(plan, tree)
-    estimate = sum(e["amount_cents"] for e in events if e["direction"] == "out")
-    income = sum(e["amount_cents"] for e in events if e["direction"] == "in")
+    events = manual_events(plan, tree)
+    estimate = _outflow(events)
+    income = _inflow(events)
     return {
         "kind": "event",
         "budget_cents": budget_cents,
@@ -571,9 +564,9 @@ def derive_scenario(db: Session, plan: Plan, tree) -> dict:
     exp_pct = int(config.get("expense_adjust_pct") or 0)
     month = date.today().replace(day=1)
     data = budgets.build_month(db, month)
-    events = _manual_events(plan, tree)
-    extra_in = sum(e["amount_cents"] for e in events if e["direction"] == "in")
-    extra_out = sum(e["amount_cents"] for e in events if e["direction"] == "out")
+    events = manual_events(plan, tree)
+    extra_in = _inflow(events)
+    extra_out = _outflow(events)
 
     income = round(data.income_actual * (100 + inc_pct) / 100) + extra_in
     expense = round(data.expense_actual * (100 + exp_pct) / 100) + extra_out
@@ -593,18 +586,6 @@ def derive_scenario(db: Session, plan: Plan, tree) -> dict:
     }
 
 
-def _balance_at(db: Session, account: Account, when: date) -> int:
-    """Account balance on ``when`` from the running ledger (planned rows included)."""
-    ledger = build_ledger(db, account)
-    balance = account.opening_balance_cents
-    for row in ledger.rows:
-        if row.txn.date <= when:
-            balance = row.balance_cents
-        else:
-            break
-    return balance
-
-
 def derive_affordability(db: Session, plan: Plan, tree) -> dict:
     config = _config(plan)
     purchase = int(config.get("purchase_cents") or 0)
@@ -612,11 +593,9 @@ def derive_affordability(db: Session, plan: Plan, tree) -> dict:
     when = date.fromisoformat(when_raw) if when_raw else date.today()
     account = db.get(Account, plan.account_id) if plan.account_id else None
 
-    balance = _balance_at(db, account, when) if account else 0
-    events = _manual_events(plan, tree)
-    item_delta = sum(
-        _signed(e["amount_cents"], e["direction"]) for e in events if (e["date"] or when) <= when
-    )
+    balance = balance_at(db, account, when) if account else 0
+    events = manual_events(plan, tree)
+    item_delta = sum(e["amount_cents"] for e in events if (e["date"] or when) <= when)
     before = balance + item_delta
     after = before - purchase
     body = {
@@ -638,13 +617,13 @@ def derive_affordability(db: Session, plan: Plan, tree) -> dict:
 
 
 def derive_generic(plan: Plan, tree) -> dict:
-    events = _manual_events(plan, tree)
+    events = manual_events(plan, tree)
     return {
         "kind": plan.type,
         "note": "This plan type is coming soon. Its manual items are listed below.",
-        "inflow_cents": sum(e["amount_cents"] for e in events if e["direction"] == "in"),
-        "outflow_cents": sum(e["amount_cents"] for e in events if e["direction"] == "out"),
-        "headline_cents": sum(_signed(e["amount_cents"], e["direction"]) for e in events),
+        "inflow_cents": _inflow(events),
+        "outflow_cents": _outflow(events),
+        "headline_cents": sum(e["amount_cents"] for e in events),
     }
 
 
@@ -665,7 +644,7 @@ def _drift(db: Session, events: list[dict]) -> list[dict]:
                 Transaction.date >= lo,
                 Transaction.date <= hi,
                 Transaction.category_id.is_not(None),
-                Transaction.transfer_id.is_(None),
+                func.coalesce(Transaction.link_kind, "") != TRANSFER,  # not a transfer leg
             )
             .order_by(Transaction.date)
         ).unique()
@@ -679,7 +658,7 @@ def _drift(db: Session, events: list[dict]) -> list[dict]:
         if match_id and match_id in by_id:
             used.add(match_id)
             event["matched_date"] = by_id[match_id].date.isoformat()
-            event["actual_cents"] = _signed(abs(by_id[match_id].amount_cents), event["direction"])
+            event["actual_cents"] = direction_effect(abs(by_id[match_id].amount_cents), event["direction"])
 
     for event in events:
         event.setdefault("matched_date", None)
@@ -698,7 +677,7 @@ def _drift(db: Session, events: list[dict]) -> list[dict]:
                 continue
             if event["account_id"] and txn.account_id and txn.account_id != event["account_id"]:
                 continue
-            if abs(txn.amount_cents) != event["amount_cents"]:
+            if abs(txn.amount_cents) != abs(event["amount_cents"]):
                 continue
             gap = abs((txn.date - event["date"]).days)
             if gap <= MATCH_WINDOW_DAYS and (best_gap is None or gap < best_gap):
@@ -707,14 +686,14 @@ def _drift(db: Session, events: list[dict]) -> list[dict]:
             used.add(best.id)
             event["matched_transaction_id"] = best.id
             event["matched_date"] = best.date.isoformat()
-            event["actual_cents"] = _signed(best.amount_cents, event["direction"])
+            event["actual_cents"] = direction_effect(abs(best.amount_cents), event["direction"])
 
     for event in events:
         actual = event.get("actual_cents")
         if actual is None:
             event["variance_cents"] = None
         else:
-            event["variance_cents"] = actual - _signed(event["amount_cents"], event["direction"])
+            event["variance_cents"] = actual - event["amount_cents"]
     return events
 
 
@@ -739,11 +718,14 @@ def derive(db: Session, plan: Plan) -> dict:
         body = derive_generic(plan, tree)
 
     if "events" not in body:
-        body["events"] = _manual_events(plan, tree)
-    body["events"] = _drift(db, body["events"])
+        body["events"] = manual_events(plan, tree)
+    if plan.type != "rolling":
+        body["events"] = _drift(db, body["events"])
     _sort_events(body["events"])
     if plan.type != "rolling":
         _attach_balances(db, plan, body["events"])
+    # Everything above works in signed amounts; the wire keeps magnitude + direction.
+    body["events"] = [to_public(e) for e in body["events"]]
     return body
 
 
@@ -756,8 +738,8 @@ def _item_out(item: PlanItem, tree) -> dict:
         "category_path": tree.path(item.category_id) if item.category_id else "",
         "account_id": item.account_id,
         "account_name": item.account.name if item.account else None,
-        "amount_cents": item.amount_cents,
-        "direction": item.direction,
+        "amount_cents": abs(item.amount_cents),
+        "direction": direction_of(item.amount_cents),
         "item_kind": item.item_kind,
         "source": item.source,
         "matched_transaction_id": item.matched_transaction_id,

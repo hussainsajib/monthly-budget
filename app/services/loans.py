@@ -19,11 +19,11 @@ from datetime import date
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import Account, LoanDetails, RecurringTemplate, Transaction
+from app.models import TRANSFER, Account, LoanDetails, RecurringTemplate, Transaction
 from app.models.ledger import signed_delta
 from app.services import transfers as transfer_service
 from app.services.balances import balance_deltas
-from app.services.cashflow import build_ledger
+from app.services.cashflow import balance_on, build_ledger, running_deltas
 from app.services.category_config import income_keys
 from app.services.loan_config import get_loan_types
 from app.services.recurring import occurrences
@@ -114,19 +114,19 @@ def scheduled_payments(
     today = today or date.today()
     templates = db.scalars(
         select(RecurringTemplate).where(
-            RecurringTemplate.loan_account_id.in_(account_ids),
+            RecurringTemplate.to_account_id.in_(account_ids),
             RecurringTemplate.is_active.is_(True),
         )
     ).unique()
     best: dict[int, dict] = {}
     for tpl in templates:
         when = _next_occurrence(_schedule_of(tpl), today)
-        if when is None or tpl.loan_account_id is None:
+        if when is None or tpl.to_account_id is None:
             continue
-        current = best.get(tpl.loan_account_id)
+        current = best.get(tpl.to_account_id)
         if current is not None and date.fromisoformat(current["date"]) <= when:
             continue
-        best[tpl.loan_account_id] = {
+        best[tpl.to_account_id] = {
             "recurring_template_id": tpl.id,
             "description": tpl.description,
             "amount_cents": abs(tpl.amount_cents),
@@ -287,35 +287,14 @@ def debt_trend(db: Session, months: int = 12) -> list[dict]:
     if not accounts:
         return [{"month": end.strftime("%Y-%m"), "owed_cents": 0} for end in ends]
 
-    income = income_keys(db)
-    txns = list(
-        db.scalars(
-            select(Transaction)
-            .where(Transaction.account_id.in_({a.id for a in accounts}))
-            .order_by(Transaction.date, Transaction.id)
-        ).unique()
-    )
-    # (date, cumulative signed balance) per account, so each month-end is a walk to its last entry.
-    running = {a.id: 0 for a in accounts}
-    timeline: dict[int, list[tuple[date, int]]] = {a.id: [] for a in accounts}
-    for txn in txns:
-        if txn.account_id not in running:
-            continue
-        running[txn.account_id] += txn.cash_delta_cents(txn.category.kind in income)
-        timeline[txn.account_id].append((txn.date, running[txn.account_id]))
-
+    timelines = running_deltas(db, accounts)
     out: list[dict] = []
     for end in ends:
         signed = 0
         for account in accounts:
             if account.opening_date and account.opening_date > end:
                 continue
-            delta = 0
-            for txn_date, value in timeline[account.id]:
-                if txn_date > end:
-                    break
-                delta = value
-            signed += account.opening_balance_cents + delta
+            signed += account.opening_balance_cents + balance_on(timelines[account.id], end)
         out.append({"month": end.strftime("%Y-%m"), "owed_cents": -signed})
     return out
 
@@ -440,7 +419,7 @@ def convert_to_payment(db: Session, loan: Account, txn: Transaction) -> str:
     """
     if not is_loan(loan):
         raise LoanError("That account is not a loan")
-    if txn.transfer_id is not None or txn.reimbursement_id is not None:
+    if txn.link_id is not None:
         raise LoanError("That row is already linked to a transfer or a reimbursement")
     if txn.account_id is None:
         raise LoanError("That row has no account")
@@ -452,10 +431,11 @@ def convert_to_payment(db: Session, loan: Account, txn: Transaction) -> str:
         raise LoanError("Only a money-out row can become a loan payment")
     amount = abs(txn.amount_cents)
     category = transfer_service.ensure_transfer_category(db)
-    transfer_id = str(uuid.uuid4())
+    link_id = str(uuid.uuid4())
     txn.category_id = category.id
     txn.amount_cents = -amount
-    txn.transfer_id = transfer_id
+    txn.link_id = link_id
+    txn.link_kind = TRANSFER
     db.add(
         Transaction(
             date=txn.date,
@@ -464,8 +444,9 @@ def convert_to_payment(db: Session, loan: Account, txn: Transaction) -> str:
             account_id=loan.id,
             amount_cents=amount,
             notes=txn.notes,
-            transfer_id=transfer_id,
+            link_id=link_id,
+            link_kind=TRANSFER,
         )
     )
     db.commit()
-    return transfer_id
+    return link_id

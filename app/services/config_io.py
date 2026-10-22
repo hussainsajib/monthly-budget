@@ -126,7 +126,7 @@ def export_config(db: Session) -> dict:
             "description": t.description,
             "category": path_of[t.category_id],
             "account": t.account.name if t.account else None,
-            "loan": t.loan_account.name if t.loan_account else None,
+            "to": t.to_account.name if t.to_account else None,
             "amount_cents": t.amount_cents,
             "day_of_month": t.day_of_month,
             "schedule": t.schedule,
@@ -280,7 +280,7 @@ def _apply(db: Session, data: dict) -> dict[str, int]:
         account_name = entry.get("account")
         if account_name is not None and account_name not in accounts:
             raise ConfigError(f"recurring item {entry['description']!r}: unknown account {account_name!r}")
-        loan_name = entry.get("loan")
+        loan_name = entry.get("to", entry.get("loan"))  # "to" is the new name; "loan" reads old files
         if loan_name is not None:
             if loan_name not in accounts:
                 raise ConfigError(f"recurring item {entry['description']!r}: unknown loan {loan_name!r}")
@@ -295,7 +295,7 @@ def _apply(db: Session, data: dict) -> dict[str, int]:
             tpl = RecurringTemplate(description=entry["description"], category_id=cat.id)
             db.add(tpl)
         tpl.account_id = accounts[account_name].id if account_name else None
-        tpl.loan_account_id = accounts[loan_name].id if loan_name else None
+        tpl.to_account_id = accounts[loan_name].id if loan_name else None
         tpl.amount_cents = int(entry["amount_cents"])
         tpl.day_of_month = int(entry.get("day_of_month", 1))
         tpl.schedule = validate_schedule(entry["schedule"]) if entry.get("schedule") is not None else None

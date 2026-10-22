@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 class ConfigField:
     key: str
     label: str
-    kind: str  # money | int | date | text | select | category
+    kind: str  # money | int | date | text | select | category | categories | paycheck
     placeholder: str = ""
     help: str = ""
     options: tuple[tuple[str, str], ...] = ()
@@ -69,6 +69,13 @@ PLAN_TYPES: tuple[PlanType, ...] = (
                 "The window runs from today through this many upcoming paychecks.",
             ),
             ConfigField("buffer_cents", "Keep a buffer of", "money", "0", "Reserved cushion before 'safe to spend'."),
+            ConfigField(
+                "variable_category_ids",
+                "Variable monthly spending",
+                "categories",
+                "",
+                "Categories spent every month but not on a fixed day (groceries, fuel, …).",
+            ),
         ),
     ),
     PlanType(

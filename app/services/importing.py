@@ -13,7 +13,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.money import to_cents
-from app.models import TRANSFER, Category, Transaction
+from app.models import Category, Transaction
+from app.models.ledger import stored_amount
 from app.services import import_rules, suggestions
 from app.services.category_config import income_keys
 
@@ -177,12 +178,6 @@ def apply_rules(db: Session, rows: list[ParsedRow], account_id: int | None) -> N
         )
 
 
-def signed_amount(direction: str, is_income: bool, cents: int) -> int:
-    """Money in on an expense category (refund) or money out on income is stored negative."""
-    natural = "in" if is_income else "out"
-    return cents if direction == natural else -cents
-
-
 def commit_rows(db: Session, rows: list[ParsedRow], account_id: int | None) -> int:
     kinds = {c.id: c.kind for c in db.scalars(select(Category))}
     income = income_keys(db)
@@ -196,11 +191,11 @@ def commit_rows(db: Session, rows: list[ParsedRow], account_id: int | None) -> i
         existing.add(row.key)
         created += 1
         kind = kinds[row.category_id]
-        if kind == TRANSFER:
-            # A transfer leg is stored with the signed effect on its account (out negative, in positive).
-            amount_cents = -row.amount_cents if row.direction == "out" else row.amount_cents
-        else:
-            amount_cents = signed_amount(row.direction, kind in income, row.amount_cents)
+        # One rule writes the row: money in on an expense (a refund) or money out on income is stored
+        # negative; a transfer leg is stored as its signed effect. See ``ledger.stored_amount``.
+        amount_cents = stored_amount(
+            row.amount_cents, direction=row.direction, kind=kind, is_income=kind in income
+        )
         db.add(
             Transaction(
                 date=row.date,

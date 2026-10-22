@@ -82,9 +82,8 @@ def _actuals(db: Session, month: date) -> dict[int, int]:
         .where(
             Transaction.date >= month,
             Transaction.date < _next_month(month),
-            Transaction.transfer_id.is_(None),  # transfers are not spending
+            Transaction.link_id.is_(None),  # paired transfers/reimbursements are not spending
             ~Transaction.category.has(Category.kind == TRANSFER),  # pending transfer legs neither
-            Transaction.reimbursement_id.is_(None),  # connected reimbursements are not spending
         )
         .group_by(Transaction.category_id)
     )

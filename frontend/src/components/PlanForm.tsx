@@ -1,15 +1,17 @@
 import { useState, type FormEvent } from 'react'
 import { X } from 'lucide-react'
-import Select from 'react-select'
+import Select, { type MultiValue, type StylesConfig } from 'react-select'
 import { api } from '../api'
 import { centsToInput, formatMoney, todayIso } from '../money'
 import { useAccounts, useCategories, useCategoryConfig, usePlanTypes, useRecurring } from '../queries'
 import { useRun } from '../toast'
-import type { Plan, PlanBody, PlanConfigField, PlanType, Recurring, Schedule } from '../types'
+import type { Category, Plan, PlanBody, PlanConfigField, PlanType, Recurring, Schedule } from '../types'
 import { AccountSelect, CategorySelect, selectStyles } from './selects'
 import { Modal } from './ui'
 
 const NEW_PAYCHECK = '__new__'
+
+type RecurringImportOption = { value: string; label: string }
 
 type PaycheckFrequency = 'weekly' | 'biweekly' | 'semimonthly' | 'monthly'
 
@@ -49,26 +51,63 @@ function paycheckSchedule(frequency: PaycheckFrequency, start: string): Schedule
   return { ...base, freq: 'monthly', interval: 1, by_month_day: [Number(start.slice(8, 10))] }
 }
 
-function defaultConfig(type: PlanType): Record<string, string> {
-  const out: Record<string, string> = {}
+type ConfigValue = string | number[]
+
+function defaultConfig(type: PlanType): Record<string, ConfigValue> {
+  const out: Record<string, ConfigValue> = {}
   for (const f of type.config_fields) {
     if (f.kind === 'select') out[f.key] = f.options[0]?.key ?? ''
     else if (f.kind === 'money') out[f.key] = '0'
     else if (f.kind === 'int') out[f.key] = f.placeholder || '0'
+    else if (f.kind === 'categories') out[f.key] = []
     else out[f.key] = ''
   }
   return out
 }
 
-function configFromPlan(type: PlanType, plan: Plan): Record<string, string> {
-  const out: Record<string, string> = {}
+function configFromPlan(type: PlanType, plan: Plan): Record<string, ConfigValue> {
+  const out: Record<string, ConfigValue> = {}
   for (const f of type.config_fields) {
     const raw = plan.config[f.key]
     if (raw == null) out[f.key] = ''
     else if (f.kind === 'money') out[f.key] = centsToInput(Number(raw))
+    else if (f.kind === 'categories') out[f.key] = Array.isArray(raw) ? raw.map((x) => Number(x)) : []
     else out[f.key] = String(raw)
   }
   return out
+}
+
+function CategoryMultiSelect({
+  categories,
+  value,
+  onChange,
+  id,
+}: {
+  categories: Category[]
+  value: number[]
+  onChange: (ids: number[]) => void
+  id?: string
+}) {
+  const options = categories
+    .filter((c) => !c.has_children && c.is_active)
+    .map((c) => ({ value: String(c.id), label: c.path }))
+  return (
+    <Select
+      inputId={id}
+      classNamePrefix="rs"
+      menuPosition="fixed"
+      menuPortalTarget={document.body}
+      styles={selectStyles as unknown as StylesConfig<RecurringImportOption, true>}
+      isMulti
+      isSearchable
+      closeMenuOnSelect={false}
+      hideSelectedOptions={false}
+      options={options}
+      value={options.filter((o) => value.includes(Number(o.value)))}
+      placeholder="Choose categories…"
+      onChange={(vals: MultiValue<RecurringImportOption>) => onChange((vals ?? []).map((o) => Number(o.value)))}
+    />
+  )
 }
 
 function ConfigFieldInput({
@@ -79,12 +118,27 @@ function ConfigFieldInput({
   idPrefix,
 }: {
   field: PlanConfigField
-  value: string
-  onChange: (v: string) => void
+  value: ConfigValue
+  onChange: (v: ConfigValue) => void
   categories: ReturnType<typeof useCategories>['data']
   idPrefix: string
 }) {
   const id = `${idPrefix}-${field.key}`
+  if (field.kind === 'categories') {
+    return (
+      <div className="field-full">
+        <label htmlFor={id}>{field.label}</label>
+        <CategoryMultiSelect
+          id={id}
+          categories={categories ?? []}
+          value={Array.isArray(value) ? value : []}
+          onChange={(ids) => onChange(ids)}
+        />
+        {field.help && <span className="small muted">{field.help}</span>}
+      </div>
+    )
+  }
+  const str = typeof value === 'string' ? value : ''
   if (field.kind === 'category') {
     return (
       <div className="field-full">
@@ -92,7 +146,7 @@ function ConfigFieldInput({
         <CategorySelect
           id={id}
           categories={categories ?? []}
-          value={value ? Number(value) : null}
+          value={str ? Number(str) : null}
           onChange={(v) => onChange(v == null ? '' : String(v))}
           blank={field.help || '— none —'}
         />
@@ -103,7 +157,7 @@ function ConfigFieldInput({
     <div>
       <label htmlFor={id}>{field.label}</label>
       {field.kind === 'select' ? (
-        <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
+        <select id={id} value={str} onChange={(e) => onChange(e.target.value)}>
           {field.options.map((o) => (
             <option key={o.key} value={o.key}>
               {o.label}
@@ -115,7 +169,7 @@ function ConfigFieldInput({
           id={id}
           type={field.kind === 'date' ? 'date' : 'text'}
           inputMode={field.kind === 'money' || field.kind === 'int' ? 'decimal' : undefined}
-          value={value}
+          value={str}
           placeholder={field.placeholder}
           onChange={(e) => onChange(e.target.value)}
         />
@@ -279,7 +333,7 @@ export function PlanFormModal({
   const [status, setStatus] = useState(plan?.status ?? 'active')
   const [newPaycheck, setNewPaycheck] = useState<NewPaycheckDraft>(emptyPaycheck)
   const selected = types.find((t) => t.key === typeKey)
-  const [config, setConfig] = useState<Record<string, string>>(() => {
+  const [config, setConfig] = useState<Record<string, ConfigValue>>(() => {
     if (plan) {
       const t = types.find((x) => x.key === plan.type)
       return t ? configFromPlan(t, plan) : {}
@@ -383,7 +437,7 @@ export function PlanFormModal({
               <PaycheckField
                 key={f.key}
                 field={f}
-                value={config[f.key] ?? ''}
+                value={String(config[f.key] ?? '')}
                 onChange={(v) => setConfig((prev) => ({ ...prev, [f.key]: v }))}
                 templates={incomeTemplates}
                 accounts={accounts}

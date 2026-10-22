@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 from sqlalchemy import delete
@@ -101,6 +101,85 @@ def test_rolling_projection_uses_paychecks_and_commitments(client, ids):
     assert derived["safe_to_spend_cents"] == derived["inflow_cents"] - derived["outflow_cents"] - 10000
 
 
+def test_rolling_counts_future_transactions_but_not_todays(client, ids):
+    cats, accs = ids
+    assert _income_template(client, cats, accs).status_code == 201
+
+    def post(description, when, amount):
+        client.post(
+            "/api/transactions",
+            json={
+                "date": when,
+                "description": description,
+                "category_id": cats["Dining Out / Takeout"],
+                "account_id": accs["Chequing"],
+                "amount": amount,
+                "notes": "",
+            },
+        )
+
+    post("Upcoming bill", (date.today() + timedelta(days=5)).isoformat(), "25")
+    post("Today bill", date.today().isoformat(), "40")
+
+    plan_id = client.post(
+        "/api/plans",
+        json={"name": "Rolling", "type": "rolling", "account_id": accs["Chequing"], "config": {}},
+    ).json()["id"]
+
+    derived = client.get(f"/api/plans/{plan_id}").json()["derived"]
+    ledger = [e for e in derived["events"] if e["source"] == "ledger"]
+    # The window now spans the whole current month, so today's row shows too - it is still a real
+    # movement, just one dated on or before today rather than hidden inside the opening balance.
+    assert [e["description"] for e in ledger] == ["Today bill", "Upcoming bill"]
+    assert ledger[0]["amount_cents"] == 4000 and ledger[0]["direction"] == "out"
+
+
+def test_rolling_window_includes_past_expense_and_match_status(client, ids):
+    cats, accs = ids
+    assert _income_template(client, cats, accs).status_code == 201
+    first = date.today().replace(day=1)
+
+    client.post(
+        "/api/recurring",
+        json={
+            "description": "Utilities",
+            "category_id": cats["Utilities"],
+            "account_id": accs["Chequing"],
+            "amount": "40",
+            "day_of_month": 1,
+            "schedule": {"freq": "monthly", "interval": 1, "start": "2020-01-01", "by_month_day": [1]},
+            "is_active": True,
+        },
+    )
+    client.post(
+        "/api/transactions",
+        json={
+            "date": first.isoformat(),
+            "description": "Utilities",
+            "category_id": cats["Utilities"],
+            "account_id": accs["Chequing"],
+            "amount": "40",
+            "notes": "",
+        },
+    )
+
+    plan_id = client.post(
+        "/api/plans",
+        json={"name": "Rolling", "type": "rolling", "account_id": accs["Chequing"], "config": {}},
+    ).json()["id"]
+
+    events = client.get(f"/api/plans/{plan_id}").json()["derived"]["events"]
+    occ = [
+        e
+        for e in events
+        if e["source"] == "recurring" and e["description"] == "Utilities" and e["date"] == first.isoformat()
+    ]
+    # The already-passed occurrence is no longer skipped, and drift-matched it to the real transaction.
+    assert len(occ) == 1
+    assert occ[0]["matched_transaction_id"] is not None
+    assert occ[0]["actual_cents"] == -4000
+
+
 def test_rolling_paycheck_can_be_chosen(client, ids):
     cats, accs = ids
     assert _income_template(client, cats, accs, amount="1000").status_code == 201
@@ -146,6 +225,26 @@ def test_recurring_exposes_income_flag(client, ids):
     assert _income_template(client, cats, accs).status_code == 201
     rows = client.get("/api/recurring").json()
     assert any(r["description"] == "Paycheque" and r["is_income"] for r in rows)
+
+
+def test_rolling_counts_budgeted_variable_spending(client, ids):
+    cats, accs = ids
+    plan_id = client.post(
+        "/api/plans",
+        json={
+            "name": "Variable",
+            "type": "rolling",
+            "account_id": accs["Chequing"],
+            "start_date": "2026-01-01",
+            "end_date": "2026-02-28",
+            "config": {"variable_category_ids": [cats["Grocery"]]},
+        },
+    ).json()["id"]
+
+    derived = client.get(f"/api/plans/{plan_id}").json()["derived"]
+    assert derived["variable_category_count"] == 1
+    # Grocery's 60000 monthly budget, applied to each calendar month the window spans (Jan + Feb).
+    assert derived["variable_spending_cents"] == 120000
 
 
 def test_event_plan_events_show_target_account_balance(client, ids):
@@ -253,6 +352,8 @@ def test_plan_item_crud_and_drift_match(client, ids):
     detail = client.get(f"/api/plans/{plan_id}").json()
     assert detail["item_count"] == 1
     item_event = next(e for e in detail["events"] if e["item_id"] == item_id)
+    # The wire keeps the magnitude + direction pair even though the stream works in signed amounts.
+    assert item_event["amount_cents"] == 6000 and item_event["direction"] == "out"
     assert item_event["actual_cents"] == -6000
     assert item_event["variance_cents"] == 0
     assert item_event["matched_transaction_id"] is not None

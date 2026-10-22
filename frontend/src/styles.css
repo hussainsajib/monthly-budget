@@ -74,7 +74,6 @@ input:-webkit-autofill, input:-webkit-autofill:hover, input:-webkit-autofill:foc
 .inline-field-right { display: flex; align-items: end; gap: 12px; }
 .mt-12 { margin-top: 12px; }
 .mb-12 { margin-bottom: 12px; }
-.h-inline { margin: 0; }
 .unit-label { display: block; line-height: 24px; padding: 10px 0; color: var(--muted); }
 .inline-field { display: flex; align-items: center; gap: 8px; }
 .inline-field input { flex: 0 0 84px; }

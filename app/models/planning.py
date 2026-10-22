@@ -18,10 +18,11 @@ class RecurringTemplate(Base):
     description: Mapped[str] = mapped_column(String(200))
     category_id: Mapped[int] = mapped_column(ForeignKey("categories.id", ondelete="CASCADE"))
     account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"))
-    # When set, this template schedules a payment into that loan: amount flows from ``account_id``
-    # into the loan. It is still a commitment (it never writes a ledger row) and it is kept out of
+    # When set, this template schedules money into that account: amount flows from ``account_id``
+    # into ``to_account_id`` (today a loan payment; the same shape fits card payments and savings
+    # sweeps). It is still a commitment (it never writes a ledger row) and it is kept out of
     # budgets because its category is forced to the hidden transfer category.
-    loan_account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"))
+    to_account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"))
     amount_cents: Mapped[int] = mapped_column(Integer)
     day_of_month: Mapped[int] = mapped_column(Integer)  # legacy monthly day; clamped to month length on use
     # Flexible recurrence. None = monthly on day_of_month. See app.services.recurring for the format.
@@ -30,7 +31,7 @@ class RecurringTemplate(Base):
 
     category: Mapped[Category] = relationship(lazy="joined")
     account: Mapped[Account | None] = relationship(lazy="joined", foreign_keys=[account_id])
-    loan_account: Mapped[Account | None] = relationship(lazy="joined", foreign_keys=[loan_account_id])
+    to_account: Mapped[Account | None] = relationship(lazy="joined", foreign_keys=[to_account_id])
 
 
 class AppSetting(Base):
@@ -99,8 +100,9 @@ class Plan(Base):
 class PlanItem(Base):
     """A user's manual adjustment layered on top of a plan's derived projection.
 
-    ``amount_cents`` is a positive magnitude; ``direction`` says which way it moves. An item may
-    link a ``category_id`` (so it can be matched to a real transaction for drift) or be freeform.
+    ``amount_cents`` is the **signed effect** on the account (money out negative), the same
+    quantity every other movement reduces to. An item may link a ``category_id`` (so it can be
+    matched to a real transaction for drift) or be freeform.
     """
 
     __tablename__ = "plan_items"
@@ -112,10 +114,8 @@ class PlanItem(Base):
     category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id", ondelete="SET NULL"))
     account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"))
     amount_cents: Mapped[int] = mapped_column(Integer, default=0)
-    direction: Mapped[str] = mapped_column(String(3), default="out")  # in | out
     item_kind: Mapped[str] = mapped_column(String(20), default="custom")
-    source: Mapped[str] = mapped_column(String(10), default="manual")  # manual | recurring | future_txn
-    ref_id: Mapped[int | None] = mapped_column(Integer)
+    source: Mapped[str] = mapped_column(String(10), default="manual")
     matched_transaction_id: Mapped[int | None] = mapped_column(
         ForeignKey("transactions.id", ondelete="SET NULL")
     )

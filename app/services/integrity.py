@@ -12,7 +12,7 @@ from collections import defaultdict
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import TRANSFER, Transaction
+from app.models import REIMBURSEMENT, TRANSFER, Transaction
 
 MAX_REPORTED_IDS = 20
 
@@ -38,14 +38,16 @@ def validate_ledger(db: Session) -> dict:
     rows = list(db.scalars(select(Transaction)))
     transfers: dict[str, list[Transaction]] = defaultdict(list)
     reimbursements: dict[str, list[Transaction]] = defaultdict(list)
-    double_linked: list[Transaction] = []
+    untyped: list[Transaction] = []
     for txn in rows:
-        if txn.transfer_id is not None:
-            transfers[txn.transfer_id].append(txn)
-        if txn.reimbursement_id is not None:
-            reimbursements[txn.reimbursement_id].append(txn)
-        if txn.transfer_id is not None and txn.reimbursement_id is not None:
-            double_linked.append(txn)
+        if txn.link_id is None:
+            continue
+        if txn.link_kind == TRANSFER:
+            transfers[txn.link_id].append(txn)
+        elif txn.link_kind == REIMBURSEMENT:
+            reimbursements[txn.link_id].append(txn)
+        else:
+            untyped.append(txn)
 
     lonely_transfers: list[Transaction] = []
     same_account: list[Transaction] = []
@@ -97,9 +99,9 @@ def validate_ledger(db: Session) -> dict:
             lonely_reimbursements,
         ),
         _issue(
-            "double_linked",
-            "A row cannot be both a transfer leg and a reimbursement.",
-            double_linked,
+            "link_kind",
+            "A paired row must say what it is paired as (transfer or reimbursement).",
+            untyped,
         ),
     ]
     return {

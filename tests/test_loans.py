@@ -343,7 +343,7 @@ def test_a_recurring_item_can_schedule_a_loan_payment(client, ids, make_loan):
     body = {
         "description": "Lease payment",
         "account_id": chequing,
-        "loan_account_id": loan_id,
+        "to_account_id": loan_id,
         "amount": "450",
         "day_of_month": 15,
         "schedule": {"freq": "monthly", "interval": 1, "start": "2026-01-15", "by_month_day": [15]},
@@ -353,7 +353,7 @@ def test_a_recurring_item_can_schedule_a_loan_payment(client, ids, make_loan):
     tpl_id = res.json()["id"]
     try:
         row = next(t for t in client.get("/api/recurring").json() if t["id"] == tpl_id)
-        assert row["loan_account_id"] == loan_id and row["loan_name"] == "Lease"
+        assert row["to_account_id"] == loan_id and row["to_name"] == "Lease"
         assert row["account_id"] == chequing
         assert row["category_path"] == "Transfer \u203a Between accounts"  # a payment is a transfer
         assert row["is_income"] is False
@@ -377,11 +377,11 @@ def test_a_recurring_item_can_schedule_a_loan_payment(client, ids, make_loan):
 def test_a_loan_payment_recurring_item_needs_a_real_loan(client, ids, make_loan):
     _, accs = ids
     base = {"description": "Pay", "account_id": accs["Chequing"], "amount": "10", "day_of_month": 1}
-    not_a_loan = client.post("/api/recurring", json={**base, "loan_account_id": accs["Savings"]})
+    not_a_loan = client.post("/api/recurring", json={**base, "to_account_id": accs["Savings"]})
     assert not_a_loan.status_code == 400
     loan_id = make_loan()
     from_itself = client.post(
-        "/api/recurring", json={**base, "account_id": loan_id, "loan_account_id": loan_id}
+        "/api/recurring", json={**base, "account_id": loan_id, "to_account_id": loan_id}
     )
     assert from_itself.status_code == 400
     no_category = client.post("/api/recurring", json=base)

@@ -166,6 +166,7 @@ function ItemModal({
 function RollingSummary({ plan }: { plan: Plan }) {
   const d = plan.derived
   const low = (d.lowest_balance_cents ?? 0) < 0
+  const variable = d.variable_spending_cents ?? 0
   return (
     <div className="card stat">
       <div>
@@ -174,6 +175,7 @@ function RollingSummary({ plan }: { plan: Plan }) {
           {formatMoney(d.safe_to_spend_cents ?? 0)}
         </b>
         {d.paycheck ? <span className="small muted">from {d.paycheck.description}</span> : null}
+        {variable ? <span className="small muted">after {formatMoney(variable)} variable spending</span> : null}
         {d.buffer_cents ? <span className="small muted">after a {formatMoney(d.buffer_cents)} buffer</span> : null}
       </div>
       <div>
@@ -183,6 +185,11 @@ function RollingSummary({ plan }: { plan: Plan }) {
       <div>
         <span className="muted small">Outflow</span>
         <b>{formatMoney(d.outflow_cents ?? 0)}</b>
+      </div>
+      <div>
+        <span className="muted small">Variable</span>
+        <b>{formatMoney(variable)}</b>
+        {d.variable_category_count ? <span className="small muted">{d.variable_category_count} categories</span> : null}
       </div>
       <div>
         <span className="muted small">End balance</span>

@@ -259,6 +259,19 @@ def test_account_stats(client, ids):
         client.delete(f"/api/accounts/{acc_id}")
 
 
+def test_account_balance_ignores_rows_before_the_opening_date(client, ids):
+    cats, accs = ids
+    body = {"name": "Bounded Acct", "kind": "bank", "opening_balance": "100", "opening_date": "2026-06-01"}
+    acc_id = client.post("/api/accounts", json=body).json()["id"]
+    try:
+        client.post("/api/transactions", json=_txn_body(cats, accs, date="2026-05-04", account_id=acc_id))
+        row = next(a for a in client.get("/api/accounts").json() if a["id"] == acc_id)
+        assert row["current_balance_cents"] == 10000  # the pre-opening row is already in the opening balance
+        assert row["transaction_count"] == 1  # the count still reflects every row
+    finally:
+        client.delete(f"/api/accounts/{acc_id}")
+
+
 def test_accounts_sort_by_balance(client, db):
     made = {}
     seeds = [("Sort Zeta", "bank", "10"), ("Sort Alpha", "cash", "300"), ("Sort Mid", "savings", "100")]

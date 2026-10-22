@@ -142,6 +142,8 @@ export interface Recurring {
   is_income: boolean
   account_id: number | null
   account_name: string | null
+  to_account_id: number | null
+  to_name: string | null
   amount_cents: number
   day_of_month: number
   schedule: Schedule | null
@@ -289,7 +291,7 @@ export interface BudgetMonth {
   lines: BudgetLine[]
 }
 
-export type PlanConfigKind = 'money' | 'int' | 'date' | 'text' | 'select' | 'category' | 'paycheck'
+export type PlanConfigKind = 'money' | 'int' | 'date' | 'text' | 'select' | 'category' | 'categories' | 'paycheck'
 
 export interface PlanConfigField {
   key: string
@@ -344,6 +346,8 @@ export interface PlanDerived {
   inflow_cents?: number
   outflow_cents?: number
   net_cents?: number
+  variable_spending_cents?: number
+  variable_category_count?: number
   buffer_cents?: number
   safe_to_spend_cents?: number
   end_balance_cents?: number

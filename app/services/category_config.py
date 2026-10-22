@@ -16,8 +16,6 @@ from app.models import AppSetting
 TYPES_KEY = "category_types"
 LEVELS_KEY = "category_levels"
 
-DIRECTIONS = ("in", "out")
-
 # "in" behaves like income (positive amount is money in, above budget is good); "out" like an expense.
 DEFAULT_TYPES: tuple[tuple[str, str, str], ...] = (
     ("expense", "Expense", "out"),
