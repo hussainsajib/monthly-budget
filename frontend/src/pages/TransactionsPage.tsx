@@ -18,9 +18,10 @@ import { AccountSelect, CategoryFilter } from '../components/selects'
 import { Bar, SortHeader } from '../components/table'
 import TransferForm, { type TransferFormValues } from '../components/TransferForm'
 import TxnForm, { type TxnFormValues } from '../components/TxnForm'
+import { ColumnFilter } from '../components/ColumnFilter'
 import { Modal } from '../components/ui'
 import { formatMoney, todayIso } from '../money'
-import { useAccounts, useCategories, useCategoryConfig } from '../queries'
+import { useAccounts, useCategories, useCategoryConfig, useImportCategories } from '../queries'
 import { useRun } from '../toast'
 import type { Txn } from '../types'
 
@@ -82,20 +83,25 @@ const blankTransfer = (date: string): TransferFormValues => ({
 
 // Fixed column widths keep the table from reflowing as different rows are shown.
 const COL_WIDTH: Record<string, string> = {
-  date: '10%',
-  account: '14%',
-  amount: '11%',
+  date: '9%',
+  select: '36px',
+  category_0: '12%',
+  category_1: '12%',
+  category_2: '12%',
+  account: '12%',
+  amount: '10%',
 }
 
 function TableSkeleton({ levels }: { levels: string[] }) {
   const heads: Array<{ label: string; width?: string; cls?: string }> = [
     { label: 'Date', width: COL_WIDTH.date },
+    { label: '', width: COL_WIDTH.select },
     { label: 'Description' },
-    ...levels.map((l) => ({ label: l })),
+    ...levels.map((l, i) => ({ label: l, width: COL_WIDTH[`category_${i}`] })),
     { label: 'Account', width: COL_WIDTH.account, cls: 'hide-sm' },
     { label: 'Amount', width: COL_WIDTH.amount, cls: 'num' },
   ]
-  const barWidths = heads.map((_, i) => (i === 0 ? 90 : i === 1 ? 240 : 120))
+  const barWidths = heads.map((_, i) => (i === 0 ? 70 : i === 1 ? 16 : i === 2 ? 240 : 90))
   return (
     <table className="txn-table">
       <thead>
@@ -128,6 +134,7 @@ export default function TransactionsPage() {
   const navigate = useNavigate()
   const run = useRun()
   const categories = useCategories()
+  const filterCategories = useImportCategories()
   const config = useCategoryConfig().data
   const accounts = useAccounts()
   const descriptions = useQuery({ queryKey: ['transactions', 'descriptions'], queryFn: api.descriptions })
@@ -351,15 +358,69 @@ export default function TransactionsPage() {
     chips.push({ key: 'account_id', label: `Account: ${a ? a.name : filters.account_id}`, clear: () => clearField('account_id') })
   }
 
-  const levels = (config?.levels.length ? config.levels : DEFAULT_LEVELS) ?? DEFAULT_LEVELS
+  const allLevels = (config?.levels.length ? config.levels : DEFAULT_LEVELS) ?? DEFAULT_LEVELS
+  const levels = allLevels.length > 3 ? allLevels.slice(0, 3) : allLevels
+  const filterCategoryById = new Map((filterCategories.data ?? []).map((c) => [c.id, c]))
+  const activeCategory = filters.category_id ? filterCategoryById.get(Number(filters.category_id)) : undefined
   const categoryColumns: ColumnDef<Txn>[] = levels.map((label, i) => ({
     id: `category_${i}`,
     enableSorting: false,
-    header: () => <span>{label}</span>,
-    cell: ({ row }) => row.original.category_path?.split(' \u203a ')[i] ?? '',
+    header: () => (
+      <span className="th-inner">
+        <span>{label}</span>
+        <ColumnFilter label={label} active={!!activeCategory && activeCategory.depth >= i}>
+          <CategoryFilter
+            id={`hdr-cat-${i}`}
+            categories={filterCategories.data ?? []}
+            value={filters.category_id}
+            onChange={(v) => applyField('category_id', v)}
+            levelFrom={i}
+            levelTo={i}
+          />
+        </ColumnFilter>
+      </span>
+    ),
+    cell: ({ row }) => row.original.category_path?.split(' › ')[i] ?? '',
   }))
 
   const columns: ColumnDef<Txn>[] = [
+    {
+      id: 'date',
+      accessorKey: 'date',
+      header: ({ column }) => (
+        <span className="th-inner">
+          <SortHeader column={column} label="Date" />
+          <ColumnFilter label="Date" active={rangeKey !== 'all'}>
+            <div className="segmented" role="group" aria-label="Date range">
+              {RANGE_OPTIONS.filter((o) => o.key !== 'custom').map((o) => (
+                <button key={o.key} type="button" className={rangeKey === o.key ? 'on' : ''} onClick={() => applyRange(o.key)}>
+                  {o.short}
+                </button>
+              ))}
+            </div>
+            <div>
+              <label htmlFor="hdr-start">From</label>
+              <input
+                id="hdr-start"
+                type="date"
+                value={rangeDatesValue.start}
+                onChange={(e) => applyRangeCustom({ start: e.target.value, end: rangeDatesValue.end })}
+              />
+            </div>
+            <div>
+              <label htmlFor="hdr-end">To</label>
+              <input
+                id="hdr-end"
+                type="date"
+                value={rangeDatesValue.end}
+                onChange={(e) => applyRangeCustom({ start: rangeDatesValue.start, end: e.target.value })}
+              />
+            </div>
+          </ColumnFilter>
+        </span>
+      ),
+      cell: ({ row }) => row.original.date,
+    },
     {
       id: 'select',
       enableSorting: false,
@@ -385,15 +446,23 @@ export default function TransactionsPage() {
       ),
     },
     {
-      id: 'date',
-      accessorKey: 'date',
-      header: ({ column }) => <SortHeader column={column} label="Date" />,
-      cell: ({ row }) => row.original.date,
-    },
-    {
       id: 'description',
       accessorKey: 'description',
-      header: ({ column }) => <SortHeader column={column} label="Description" />,
+      header: ({ column }) => (
+        <span className="th-inner">
+          <SortHeader column={column} label="Description" />
+          <ColumnFilter label="Description" active={!!filters.q}>
+            <input
+              id="hdr-q"
+              type="search"
+              aria-label="Search description or notes"
+              placeholder="description or notes"
+              value={draft.q}
+              onChange={(e) => onSearchChange(e.target.value)}
+            />
+          </ColumnFilter>
+        </span>
+      ),
       cell: ({ row }) => (
         <>
           {row.original.description}
@@ -407,7 +476,20 @@ export default function TransactionsPage() {
     {
       id: 'account',
       accessorKey: 'account_name',
-      header: ({ column }) => <SortHeader column={column} label="Account" />,
+      header: ({ column }) => (
+        <span className="th-inner">
+          <SortHeader column={column} label="Account" />
+          <ColumnFilter label="Account" active={!!filters.account_id}>
+            <AccountSelect
+              id="hdr-acc"
+              accounts={accounts.data ?? []}
+              value={filters.account_id ? Number(filters.account_id) : null}
+              onChange={(id) => applyField('account_id', id === null ? '' : String(id))}
+              blank="All accounts"
+            />
+          </ColumnFilter>
+        </span>
+      ),
       cell: ({ row }) => (
         <>
           {row.original.account_name ?? '—'}
@@ -507,7 +589,7 @@ export default function TransactionsPage() {
           <div className="field-cat">
             <CategoryFilter
               id="flt-cat"
-              categories={categories.data ?? []}
+              categories={filterCategories.data ?? []}
               value={filters.category_id}
               onChange={(v) => applyField('category_id', v)}
               levelTo={1}
@@ -564,7 +646,7 @@ export default function TransactionsPage() {
               <div className="field-cat">
                 <CategoryFilter
                   id="flt-cat"
-                  categories={categories.data ?? []}
+                  categories={filterCategories.data ?? []}
                   value={draft.category_id}
                   onChange={(v) => setField('category_id', v)}
                   levelFrom={2}

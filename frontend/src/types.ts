@@ -231,6 +231,7 @@ export interface Report {
   expense_budget: number
   income_budget: number
   avg_expense: number
+  avg_income: number
   type_totals: Record<string, { months: number; budget: number }>
   rows: ReportRow[]
   chart: {

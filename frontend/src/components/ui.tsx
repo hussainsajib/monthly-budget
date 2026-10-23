@@ -138,3 +138,25 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
     </div>
   )
 }
+export function MonthField({
+  id,
+  label,
+  value,
+  onChange,
+  min,
+  max,
+}: {
+  id: string
+  label: string
+  value: string
+  onChange: (month: string) => void
+  min?: string
+  max?: string
+}) {
+  return (
+    <div className="month-field">
+      <label htmlFor={id}>{label}</label>
+      <input id={id} type="month" value={value} min={min} max={max} onChange={(e) => e.target.value && onChange(e.target.value)} />
+    </div>
+  )
+}

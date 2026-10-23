@@ -1193,6 +1193,7 @@ def get_report(db: Session = Depends(get_db), month: int | None = None, as_of: d
         "expense_budget": report.expense_budget,
         "income_budget": report.income_budget,
         "avg_expense": report.avg_expense,
+        "avg_income": report.avg_income,
         "type_totals": report.type_totals,
         "rows": [
             {

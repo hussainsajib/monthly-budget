@@ -76,6 +76,10 @@ class BudgetReport:
         return _average(sum(self.expense_months), self.n_active)
 
     @property
+    def avg_income(self) -> int:
+        return _average(sum(self.income_months), self.n_active)
+
+    @property
     def last_active_index(self) -> int | None:
         return self.active[-1] if self.active else None
 

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../api'
 import { isIncomeKind } from '../categoryConfig'
-import { Loading, Modal } from '../components/ui'
+import { Loading, Modal, MonthField } from '../components/ui'
 import { Tooltip } from 'react-tooltip'
 import { centsToInput, formatMoney, todayIso } from '../money'
 import { useCategoryConfig } from '../queries'
@@ -123,7 +123,7 @@ export default function BudgetPage() {
   const [template, setTemplate] = useState<Record<number, number>>({})
   const [selected, setSelected] = useState<Record<number, boolean>>({})
   const [seededFor, setSeededFor] = useState<string | null>(null)
-  const [density, setDensity] = useState<'compact' | 'medium' | 'loose'>('medium')
+  const [density, setDensity] = useState<'compact' | 'medium' | 'loose'>('compact')
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const [undo, setUndo] = useState<{ month: string; values: Record<number, number>; changed: number } | null>(null)
@@ -242,6 +242,21 @@ export default function BudgetPage() {
     if (res) setUndo({ month, values, changed: res.changed })
   }
 
+  async function copyPrevious() {
+    if (!data) return
+    const values = Object.fromEntries(leafLines.map((l) => [l.category_id, l.budget_cents]))
+    setBusy(true)
+    const res = await run(
+      () => api.copyPreviousBudget(month),
+      (r) => (r.changed === 0 ? `${monthLabel(month)} already matched last month` : `Copied ${plural(r.changed, 'budget')} from last month`),
+    )
+    setBusy(false)
+    if (res) {
+      setSeededFor(null)
+      setUndo({ month, values, changed: res.changed })
+    }
+  }
+
   async function undoGenerate() {
     if (!undo) return
     setBusy(true)
@@ -263,10 +278,10 @@ export default function BudgetPage() {
         <>
           <div className="month-nav mb-12">
             <div className="inline-field-right">
-              <div className="month-field">
-                <label htmlFor="bud-month">Month</label>
-                <input id="bud-month" type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
-              </div>
+              <MonthField id="bud-month" label="Month" value={month} onChange={setMonth} />
+              <button type="button" className="secondary" onClick={copyPrevious} disabled={!data || busy}>
+                Copy from last month
+              </button>
               <span className="budget-primary">
                 <button type="button" onClick={() => setConfirming(true)} disabled={!data || busy}>
                   Apply template
@@ -331,7 +346,7 @@ export default function BudgetPage() {
           {undo && undo.month === month && (
             <div className="flash ok undo-bar" role="status">
               <span>
-                {undo.changed === 0 ? `${monthLabel(month)} already matched the template.` : `Applied ${plural(undo.changed, 'budget')} to ${monthLabel(month)}.`}
+                {undo.changed === 0 ? `${monthLabel(month)} already matched.` : `Updated ${plural(undo.changed, 'budget')} for ${monthLabel(month)}.`}
               </span>
               <button type="button" className="secondary small" onClick={undoGenerate} disabled={busy}>
                 Undo

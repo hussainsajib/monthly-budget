@@ -112,7 +112,9 @@ tr.next td:first-child { border-left: 2px solid var(--accent); }
 .report-table th.sub { font-weight: 500; color: var(--muted); }
 .report-table tbody tr:hover td { background: var(--bg); }
 .chip { display: inline-block; padding: 2px 8px; border-radius: 99px; background: var(--bg); border: 1px solid var(--line); font-size: 12px; color: var(--ink-2); }
-.stat { display: flex; gap: 24px; flex-wrap: wrap; }
+.stat { display: flex; gap: 24px; flex-wrap: wrap; align-items: center; }
+.stat > div { text-align: center; }
+.row > .stat { flex: 0 1 auto; margin-left: auto; }
 .stat div b { display: block; font-family: var(--font-money); font-size: 22px; font-variant-numeric: tabular-nums; }
 .charts { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
 .chart-box { position: relative; height: 300px; }
@@ -269,7 +271,7 @@ button.ghost .icon-img { filter: none; } /* the blue add icon keeps its accent c
 .budget-field .err-text { margin: 0; text-align: right; }
 .undo-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .month-nav { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; }
-.month-nav input[type=month] { width: 180px; }
+.month-field input[type=month] { width: 180px; }
 .density-toggle { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--surface); }
 .density-toggle button { display: inline-flex; align-items: center; justify-content: center; width: 40px; min-height: 44px; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--ink-2); }
 .density-toggle button + button { border-left: 1px solid var(--line); }
@@ -319,3 +321,12 @@ tfoot .total-row:first-child td { border-top-color: var(--ink-2); }
 .tile .progress { margin: 2px 0 0; }
 .flash.flash-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .flash-row .row-actions { flex: 0 0 auto; }
+.txn-table th:nth-child(2), .txn-table td:nth-child(2) { padding-left: 4px; padding-right: 4px; text-align: center; }
+.txn-table td:nth-child(2) input, .txn-table th:nth-child(2) input { margin: 0; }
+.th-inner { display: inline-flex; align-items: center; gap: 4px; }
+.col-filter-btn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; min-height: 0; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+.col-filter-btn:hover { color: var(--ink); background: var(--bg); }
+.col-filter-btn.active { color: var(--accent); }
+.col-filter-pop { position: fixed; z-index: 150; width: 260px; padding: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); font-weight: 400; display: flex; flex-direction: column; gap: 10px; }
+.col-filter-pop .cat-pair > * { flex: 1 1 100%; }
+.col-filter-pop .segmented { margin-bottom: 0; flex-wrap: wrap; }

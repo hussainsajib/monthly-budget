@@ -3,7 +3,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react'
 import { Fragment, useState } from 'react'
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../api'
-import { Loading } from '../components/ui'
+import { Loading, MonthField } from '../components/ui'
 import { formatMoney, monthLabel } from '../money'
 import type { ReportRow } from '../types'
 
@@ -46,40 +46,42 @@ export default function ReportsPage() {
       <h1>Budget tracker{range ? ` — ${range}` : ''}</h1>
 
       <div className="card row">
-        <div>
-          <label htmlFor="rep-month">Month for category chart</label>
-          <select
-            id="rep-month"
-            value={r?.month ?? ''}
-            onChange={(e) => setMonth(Number(e.target.value))}
-          >
-            {(r?.months ?? []).map((m, i) => (
-              <option key={m} value={i + 1}>
-                {monthLabel(m, true)}
-              </option>
-            ))}
-          </select>
-        </div>
+        <MonthField
+          id="rep-month"
+          label="Month for category chart"
+          value={r?.months[selected - 1] ?? ''}
+          min={r?.months[0]}
+          max={r?.months[r.months.length - 1]}
+          onChange={(m) => {
+            const i = r?.months.indexOf(m) ?? -1
+            if (i >= 0) setMonth(i + 1)
+          }}
+        />
+        {r && (
+          <div className="stat">
+            <div>
+              <span className="muted small">Income (Avg)</span>
+              <b>{formatMoney(r.avg_income)}</b>
+            </div>
+            <div>
+              <span className="muted small">Expenses (Avg)</span>
+              <b>{formatMoney(r.avg_expense)}</b>
+            </div>
+            <div>
+              <span className="muted small">Budget</span>
+              <b>{formatMoney(r.expense_budget)}</b>
+            </div>
+            <div>
+              <span className="muted small">Inc. - Exp.</span>
+              <b className={sum(r.net_months) >= 0 ? 'under' : 'over'}>{formatMoney(sum(r.net_months))}</b>
+            </div>
+          </div>
+        )}
       </div>
 
       <Loading query={report} />
       {r && (
         <>
-          <div className="card stat">
-            <div>
-              <span className="muted small">Avg monthly spending</span>
-              <b>{formatMoney(r.avg_expense)}</b>
-            </div>
-            <div>
-              <span className="muted small">Monthly budget</span>
-              <b>{formatMoney(r.expense_budget)}</b>
-            </div>
-            <div>
-              <span className="muted small">Net in window</span>
-              <b className={sum(r.net_months) >= 0 ? 'under' : 'over'}>{formatMoney(sum(r.net_months))}</b>
-            </div>
-          </div>
-
           <div className="charts">
             <div className="card">
               <h2 style={{ marginTop: 0 }}>Spending vs income by month</h2>
