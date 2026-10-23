@@ -14,7 +14,7 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { Tooltip } from 'react-tooltip'
 import { api } from '../api'
 import { DEFAULT_LEVELS, isIncomeKind } from '../categoryConfig'
-import { AccountSelect, CategoryFilter } from '../components/selects'
+import { AccountSelect, CategoryFilter, OptionSelect } from '../components/selects'
 import { Bar, SortHeader } from '../components/table'
 import TransferForm, { type TransferFormValues } from '../components/TransferForm'
 import TxnForm, { type TxnFormValues } from '../components/TxnForm'
@@ -570,21 +570,16 @@ export default function TransactionsPage() {
           </div>
           <div className="date-range">
             <label htmlFor="flt-range">Date range</label>
-            <select
+            <OptionSelect
               id="flt-range"
+              label="Date range"
               value={rangeKey}
-              onChange={(e) => {
-                const v = e.target.value as RangeKey
+              options={RANGE_OPTIONS.map((o) => ({ value: o.key, label: o.full }))}
+              onChange={(v) => {
                 if (v === 'custom') setCustomRange({ start: draft.start, end: draft.end })
-                else applyRange(v)
+                else applyRange(v as RangeKey)
               }}
-            >
-              {RANGE_OPTIONS.map((o) => (
-                <option key={o.key} value={o.key}>
-                  {o.full}
-                </option>
-              ))}
-            </select>
+            />
           </div>
           <div className="field-cat">
             <CategoryFilter
@@ -618,19 +613,19 @@ export default function TransactionsPage() {
             </button>
           </span>
         </div>
-        {chips.length > 0 && (
-          <div className="filter-chips">
+        <div className="filter-chips">
             {chips.map((c) => (
               <button key={c.key} type="button" className="chip chip-clear" onClick={c.clear}>
                 {c.label}
                 <X size={13} />
               </button>
             ))}
+          {chips.length > 0 && (
             <button type="button" className="link-button" onClick={clearFilters}>
               Clear all
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </form>
 
       {advanced && (

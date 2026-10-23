@@ -22,6 +22,7 @@ export const selectStyles: StylesConfig<Option, false> = {
     borderColor: state.isFocused ? 'var(--accent)' : 'var(--line)',
     boxShadow: state.isFocused ? '0 0 0 1px var(--accent)' : 'none',
     borderRadius: 8,
+    flexWrap: 'nowrap',
     cursor: state.isDisabled ? 'not-allowed' : 'default',
     opacity: state.isDisabled ? 0.5 : 1,
     ':hover': { borderColor: state.isFocused ? 'var(--accent)' : 'var(--line)' },
@@ -43,7 +44,15 @@ export const selectStyles: StylesConfig<Option, false> = {
     color: state.isSelected ? 'var(--accent-ink)' : 'var(--ink)',
     cursor: 'pointer',
   }),
-  singleValue: (base, state) => ({ ...base, color: state.isDisabled ? 'var(--muted)' : 'var(--ink)' }),
+  valueContainer: (base) => ({ ...base, minWidth: 0, overflow: 'hidden' }),
+  singleValue: (base, state) => ({
+    ...base,
+    maxWidth: '100%',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    color: state.isDisabled ? 'var(--muted)' : 'var(--ink)',
+  }),
   input: (base) => ({ ...base, color: 'var(--ink)' }),
   placeholder: (base) => ({ ...base, color: 'var(--muted)' }),
   indicatorSeparator: (base) => ({ ...base, backgroundColor: 'var(--line)' }),
@@ -395,6 +404,31 @@ export function AccountSelect({ accounts, value, onChange, blank = '— none —
       placeholder={blank}
       aria-label="Account"
       onChange={(opt) => onChange(opt ? Number(opt.value) : null)}
+    />
+  )
+}
+interface OptionSelectProps {
+  options: Option[]
+  value: string
+  onChange: (value: string) => void
+  id?: string
+  label: string
+}
+
+export function OptionSelect({ options, value, onChange, id, label }: OptionSelectProps) {
+  return (
+    <Select
+      inputId={id}
+      classNamePrefix="rs"
+      menuPosition="fixed"
+      menuPortalTarget={document.body}
+      styles={selectStyles}
+      isSearchable={false}
+      isClearable={false}
+      options={options}
+      value={options.find((o) => o.value === value) ?? null}
+      aria-label={label}
+      onChange={(opt) => opt && onChange(opt.value)}
     />
   )
 }

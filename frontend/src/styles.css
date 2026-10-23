@@ -37,7 +37,7 @@ h2 { font-size: 16px; margin: 24px 0 10px; }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
 .panel { background: var(--surface); border-radius: var(--radius); overflow: hidden; }
 .filter-bar { margin: 28px 0 12px; }
-.filter-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 12px; }
+.filter-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 12px; min-height: 30px; }
 .chip.chip-clear { cursor: pointer; display: inline-flex; align-items: center; gap: 6px; border: 0; padding: 4px 10px; }
 .chip.chip-clear:hover { border-color: var(--accent); color: var(--ink); }
 .chip.chip-clear svg { color: var(--muted); }
@@ -332,3 +332,6 @@ tfoot .total-row:first-child td { border-top-color: var(--ink-2); }
 .col-filter-pop .segmented { margin-bottom: 0; flex-wrap: wrap; }
 .report-head { margin-bottom: 16px; }
 .row > .head-field { flex: 0 0 180px; min-width: 0; }
+html { scrollbar-gutter: stable; }
+.field-cat, .date-range { min-width: 0; }
+.row > .date-range { flex: 0 0 180px; }
