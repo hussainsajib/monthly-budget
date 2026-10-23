@@ -194,12 +194,14 @@ def event_stream(
     """Merge the requested sources into one list - the single entry point callers should use.
 
     Not sorted here: callers know the tie-breaks they want (plans put manual items last on a date).
+    Manual items dated after ``end`` are dropped (undated items fall back to ``start``), so every
+    source honours the requested window.
     """
     events: list[Event] = []
     if RECURRING in sources:
         events += recurring_events(db, start, end, income_only=income_only, tree=tree)
     if MANUAL in sources and plan is not None:
-        events += manual_events(plan, tree)
+        events += [e for e in manual_events(plan, tree) if (e["date"] or start) <= end]
     if LEDGER in sources:
         events += ledger_events(db, start, end, after=after, account_id=account_id, tree=tree)
     return events

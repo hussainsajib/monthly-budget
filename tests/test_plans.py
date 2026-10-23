@@ -37,11 +37,15 @@ def _income_template(client, cats, accs, amount="2000"):
 def test_plan_types_registry(client):
     types = client.get("/api/plan-types").json()
     keys = {t["key"] for t in types}
-    assert {"rolling", "goal", "debt", "event", "scenario", "affordability"} <= keys
+    assert {"rolling", "goal", "savings", "debt", "event", "scenario", "affordability"} <= keys
     rolling = next(t for t in types if t["key"] == "rolling")
     assert rolling["implemented"] and rolling["account_aware"]
     assert any(f["key"] == "lookahead_paychecks" for f in rolling["config_fields"])
     assert any(f["key"] == "paycheck_id" and f["kind"] == "paycheck" for f in rolling["config_fields"])
+    savings = next(t for t in types if t["key"] == "savings")
+    assert savings["implemented"] and not savings["account_aware"]
+    assert any(f["key"] == "target_date" for f in savings["config_fields"])
+    assert not any(f["key"] == "month" for f in savings["config_fields"])
 
 
 def test_create_update_delete_plan(client, ids):
@@ -315,6 +319,115 @@ def test_goal_progress_from_funding_category(client, ids):
     assert derived["funded_cents"] == 30000
     assert derived["remaining_cents"] == 90000
     assert derived["progress_pct"] == 25.0
+
+
+def test_goal_funding_nets_spending_against_target_account(client, ids):
+    cats, accs = ids
+    plan_id = client.post(
+        "/api/plans",
+        json={
+            "name": "Holiday fund",
+            "type": "goal",
+            "account_id": accs["Savings"],
+            "config": {"target_cents": "1000", "category_id": cats["Grocery"]},
+        },
+    ).json()["id"]
+
+    # Money leaving Chequing (not the target account) is a contribution into the fund.
+    client.post(
+        "/api/transactions",
+        json={
+            "date": date.today().isoformat(),
+            "description": "Move to holiday fund",
+            "category_id": cats["Grocery"],
+            "account_id": accs["Chequing"],
+            "amount": "300",
+            "notes": "",
+        },
+    )
+    # Money leaving Savings (the target account) is spending drawn from the fund.
+    client.post(
+        "/api/transactions",
+        json={
+            "date": date.today().isoformat(),
+            "description": "Booked a flight",
+            "category_id": cats["Grocery"],
+            "account_id": accs["Savings"],
+            "amount": "100",
+            "notes": "",
+        },
+    )
+
+    derived = client.get(f"/api/plans/{plan_id}").json()["derived"]
+    funding = derived["funding"]
+    assert funding["account_name"] == "Savings"
+    assert funding["in_cents"] == 30000
+    assert funding["out_cents"] == 10000
+    assert funding["net_cents"] == 20000
+    assert [t["direction"] for t in funding["transactions"]] == ["in", "out"]
+    # The headline funded figure is the net, so spending no longer inflates progress.
+    assert derived["funded_cents"] == 20000
+    assert derived["remaining_cents"] == 80000
+
+
+def test_savings_window_projects_months_and_tracks_target(client, ids):
+    cats, accs = ids
+    today = date.today()
+    this_month = today.replace(day=1)
+    last_month = (this_month - timedelta(days=1)).replace(day=1)
+    next_month = (this_month + timedelta(days=32)).replace(day=1)
+
+    # Spend 400 in an elapsed month (Grocery's budget is 60000), so it shows as actual.
+    client.post(
+        "/api/transactions",
+        json={
+            "date": (last_month + timedelta(days=10)).isoformat(),
+            "description": "Groceries",
+            "category_id": cats["Grocery"],
+            "account_id": accs["Chequing"],
+            "amount": "400",
+            "notes": "",
+        },
+    )
+    plan_id = client.post(
+        "/api/plans",
+        json={
+            "name": "Holiday fund",
+            "type": "savings",
+            "account_id": None,
+            "start_date": last_month.isoformat(),
+            "config": {"target_cents": "2000", "target_date": next_month.isoformat(), "category_id": cats["Grocery"]},
+        },
+    ).json()["id"]
+
+    derived = client.get(f"/api/plans/{plan_id}").json()["derived"]
+    assert derived["kind"] == "savings"
+    # The window runs from the start month to the target month, inclusive.
+    assert derived["window"] == {"start": last_month.isoformat()[:7], "end": next_month.isoformat()[:7]}
+
+    months = derived["months"]
+    assert [m["month"] for m in months] == [
+        last_month.isoformat()[:7],
+        this_month.isoformat()[:7],
+        next_month.isoformat()[:7],
+    ]
+    # Only the fully-elapsed month is actual; this month and the target month are projected.
+    assert [m["kind"] for m in months] == ["actual", "projected", "projected"]
+    assert months[-1]["cumulative_cents"] == derived["net_cents"] == sum(m["net_cents"] for m in months)
+
+    # Categories compare budget vs actual across elapsed months only.
+    grocery = next(c for c in derived["categories"] if c["name"] == "Grocery")
+    assert grocery["budget_cents"] == 60000
+    assert grocery["actual_cents"] == 40000
+    assert grocery["remaining_cents"] == 20000
+    assert derived["underspend_cents"] >= 20000
+
+    # The elapsed-month grocery transaction also funds the target via the funding category.
+    assert derived["target_cents"] == 200000
+    assert derived["funded_cents"] == 40000
+    assert derived["remaining_cents"] == 160000
+    assert derived["progress_pct"] == 20.0
+    assert derived["headline_cents"] == derived["net_cents"]
 
 
 def test_plan_item_crud_and_drift_match(client, ids):

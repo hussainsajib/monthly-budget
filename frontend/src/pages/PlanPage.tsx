@@ -14,6 +14,8 @@ function headline(plan: Plan): { value: string; note: string } {
       return { value: formatMoney(d.safe_to_spend_cents ?? 0), note: 'safe to spend' }
     case 'goal':
       return { value: `${d.progress_pct ?? 0}%`, note: `of ${formatMoney(d.target_cents ?? 0)}` }
+    case 'savings':
+      return { value: formatMoney(d.net_cents ?? 0), note: 'free to save' }
     case 'debt':
       return {
         value: d.months_to_payoff != null ? `${d.months_to_payoff} mo` : '—',

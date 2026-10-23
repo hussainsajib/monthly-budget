@@ -121,6 +121,7 @@ migrations/            Alembic revisions: schema only (0001 initial, 0003 monthl
 samples/               starter-config.json: generic categories/accounts for new users and the tests
 tests/                 pytest; runs the real migrations on a temp SQLite file, then loads the starter config
 scripts/start.sh       container entrypoint: migrate, then serve
+scripts/scratch_ui.py  throw-away UI test database (migrate + starter config + demo data, then serve)
 ```
 
 Rule of thumb: API handlers parse input and shape JSON; services own the rules; models hold no logic beyond helpers.

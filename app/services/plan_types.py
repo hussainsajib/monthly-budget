@@ -35,6 +35,7 @@ class PlanType:
         return {
             "rolling": "safe to spend",
             "goal": "progress",
+            "savings": "free to save",
             "debt": "months to payoff",
             "event": "estimate",
             "scenario": "net",
@@ -93,7 +94,38 @@ PLAN_TYPES: tuple[PlanType, ...] = (
                 "Funding category",
                 "category",
                 "",
-                "Optional. Progress is measured from this category's transactions.",
+                "Optional. Progress is measured from this category's transactions, net of spending. "
+                "Set a target account to split funding from spending.",
+            ),
+        ),
+    ),
+    PlanType(
+        key="savings",
+        label="Savings plan",
+        description=(
+            "Projects a savings plan across every month from the start date to the target date — "
+            "actual income and spending for months gone by, budgeted amounts for the months ahead — "
+            "so you can see how much is free to set aside, and where to cut, to hit a savings target."
+        ),
+        account_aware=False,
+        implemented=True,
+        item_kinds=("contribution", "custom"),
+        config_fields=(
+            ConfigField("target_cents", "Savings target", "money", "0", "How much you want to have set aside."),
+            ConfigField(
+                "target_date",
+                "Target date",
+                "date",
+                "",
+                "Optional. The window ends here; used to size how much to set aside each month.",
+            ),
+            ConfigField(
+                "category_id",
+                "Funding category",
+                "category",
+                "",
+                "Optional. Progress is measured from this category's transactions, net of spending. "
+                "Set a target account to split funding from spending.",
             ),
         ),
     ),

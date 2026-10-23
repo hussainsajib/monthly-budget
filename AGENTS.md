@@ -57,6 +57,9 @@ pytest
 ruff check .
 ```
 
+**Testing:** read `docs/testing.md` for the full workflow — automated checks, the scratch UI
+environment (`python scripts/scratch_ui.py`), and how to verify a rolling plan on the UI.
+
 ## Run / boot (after checking out on a new machine)
 
 Requires Python 3 + Node.js. Rebuild dirs (`.venv`, `frontend/node_modules`,

@@ -3,10 +3,10 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { Pencil, Trash, X } from 'lucide-react'
 import { api } from '../api'
-import { formatMoney, todayIso } from '../money'
+import { formatMoney, monthLabel, todayIso } from '../money'
 import { useAccounts, useCategories, usePlan, usePlanTypes } from '../queries'
 import { useRun } from '../toast'
-import type { Plan, PlanEvent, PlanItem, PlanItemBody } from '../types'
+import type { Plan, PlanEvent, PlanItem, PlanItemBody, PlanSavingsCategory } from '../types'
 import { PlanFormModal } from '../components/PlanForm'
 import { AccountSelect, CategorySelect } from '../components/selects'
 import { Modal, Loading } from '../components/ui'
@@ -233,6 +233,176 @@ function GoalSummary({ plan }: { plan: Plan }) {
         <span style={{ width: `${pct}%` }} />
       </div>
     </div>
+  )
+}
+
+function SavingsSummary({ plan }: { plan: Plan }) {
+  const d = plan.derived
+  const pct = Math.max(0, Math.min(100, d.progress_pct ?? 0))
+  const under = d.underspend_cents ?? 0
+  const net = d.net_cents ?? 0
+  const categories = d.categories ?? []
+  const months = d.months ?? []
+  const hasActual = months.some((m) => m.kind === 'actual')
+  return (
+    <>
+      <div className="card stat">
+        <div>
+          <span className="muted small">Free to save</span>
+          <b className={net < 0 ? 'over' : ''}>{formatMoney(net)}</b>
+          <span className="small muted">
+            {d.window ? `${monthLabel(d.window.start)}–${monthLabel(d.window.end, true)}` : ''} · income minus spending
+          </span>
+        </div>
+        <div>
+          <span className="muted small">Under budget</span>
+          <b className={under < 0 ? 'over' : 'under'}>{formatMoney(under)}</b>
+          <span className="small muted">spent less than planned</span>
+        </div>
+        <div>
+          <span className="muted small">Set aside</span>
+          <b>{formatMoney(d.funded_cents ?? 0)}</b>
+          {d.target_date ? <span className="small muted">by {d.target_date}</span> : null}
+        </div>
+        <div>
+          <span className="muted small">Target</span>
+          <b>{formatMoney(d.target_cents ?? 0)}</b>
+          <span className="small muted">{formatMoney(d.remaining_cents ?? 0)} to go</span>
+        </div>
+        {d.required_monthly_cents != null && (
+          <div>
+            <span className="muted small">Needed / month</span>
+            <b>{formatMoney(d.required_monthly_cents)}</b>
+            {d.months_remaining ? <span className="small muted">{d.months_remaining} months left</span> : null}
+          </div>
+        )}
+      </div>
+      <div className="progress" style={{ marginTop: 12 }}>
+        <span style={{ width: `${pct}%` }} />
+      </div>
+
+      {months.length > 0 && (
+        <div className="card table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Month</th>
+                <th className="num">Income</th>
+                <th className="num">Spending</th>
+                <th className="num">Free</th>
+                <th className="num">Running</th>
+              </tr>
+            </thead>
+            <tbody>
+              {months.map((m) => (
+                <tr key={m.month} className={m.kind === 'projected' ? 'planned' : ''}>
+                  <td>
+                    {monthLabel(m.month, true)}
+                    <span className="chip">{m.kind === 'actual' ? 'actual' : 'planned'}</span>
+                  </td>
+                  <td className="num money">{formatMoney(m.income_cents)}</td>
+                  <td className="num money">{formatMoney(m.expense_cents)}</td>
+                  <td className={`num money ${m.net_cents < 0 ? 'over' : 'under'}`}>{formatMoney(m.net_cents)}</td>
+                  <td className={`num money ${m.cumulative_cents < 0 ? 'over' : ''}`}>{formatMoney(m.cumulative_cents)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {categories.length > 0 && (
+        <div className="card table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Spending by category{hasActual ? ' (elapsed months)' : ''}</th>
+                <th className="num">Budget</th>
+                <th className="num">Spent</th>
+                <th className="num">Difference</th>
+              </tr>
+            </thead>
+            <tbody>
+              {categories.map((c: PlanSavingsCategory) => {
+                const diff = c.remaining_cents
+                return (
+                  <tr key={c.category_id} className={c.has_children ? 'root' : ''}>
+                    <td style={{ paddingLeft: `calc(10px + ${c.depth} * var(--tree-indent, 18px))` }}>{c.name}</td>
+                    <td className="num money">{formatMoney(c.budget_cents, true)}</td>
+                    <td className="num money">{formatMoney(c.actual_cents, true)}</td>
+                    <td className={`num money ${diff < 0 ? 'over' : diff > 0 ? 'under' : ''}`}>{formatMoney(diff)}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  )
+}
+
+function FundingActivity({ plan }: { plan: Plan }) {
+  const f = plan.derived.funding
+  if (!f) return null
+  return (
+    <>
+      <h2>Funding activity</h2>
+      <p className="small muted">
+        {f.account_name
+          ? `Money reaching ${f.account_name} funds the goal; money leaving it is spent.`
+          : 'Every transaction in the funding category counts toward the goal. Set a target account to split funding from spending.'}
+      </p>
+      <div className="card stat">
+        <div>
+          <span className="muted small">Set aside</span>
+          <b className={f.net_cents < 0 ? 'over' : ''}>{formatMoney(f.net_cents)}</b>
+          <span className="small muted">{f.category_path}</span>
+        </div>
+        <div>
+          <span className="muted small">In</span>
+          <b className="under">{formatMoney(f.in_cents)}</b>
+        </div>
+        <div>
+          <span className="muted small">Out</span>
+          <b className="over">{formatMoney(f.out_cents)}</b>
+        </div>
+      </div>
+      <div className="card table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Description</th>
+              <th>Account</th>
+              <th className="num">Amount</th>
+              <th className="num">Effect</th>
+            </tr>
+          </thead>
+          <tbody>
+            {f.transactions.map((t) => (
+              <tr key={t.id}>
+                <td>{t.date}</td>
+                <td>{t.description}</td>
+                <td className="muted">{t.account_name ?? '—'}</td>
+                <td className="num money">{formatMoney(t.amount_cents)}</td>
+                <td className={`num money ${t.signed_cents < 0 ? 'over' : 'under'}`}>
+                  {t.signed_cents < 0 ? '-' : '+'}
+                  {formatMoney(Math.abs(t.signed_cents))}
+                </td>
+              </tr>
+            ))}
+            {f.transactions.length === 0 && (
+              <tr>
+                <td colSpan={5} className="muted">
+                  No funding transactions yet.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </>
   )
 }
 
@@ -530,11 +700,14 @@ export default function PlanDetailPage() {
 
           {plan.derived.kind === 'rolling' && <RollingSummary plan={plan} />}
           {plan.derived.kind === 'goal' && <GoalSummary plan={plan} />}
+          {plan.derived.kind === 'savings' && <SavingsSummary plan={plan} />}
           {plan.derived.kind === 'debt' && <DebtSummary plan={plan} />}
           {plan.derived.kind === 'event' && <EventSummary plan={plan} />}
           {plan.derived.kind === 'scenario' && <ScenarioSummary plan={plan} />}
           {plan.derived.kind === 'affordability' && <AffordabilitySummary plan={plan} />}
           {plan.derived.note && <div className="flash info">{plan.derived.note}</div>}
+
+          {(plan.derived.kind === 'goal' || plan.derived.kind === 'savings') && <FundingActivity plan={plan} />}
 
           <h2>Window</h2>
           <EventsTable events={plan.events ?? []} />

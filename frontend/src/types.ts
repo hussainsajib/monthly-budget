@@ -359,6 +359,9 @@ export interface PlanDerived {
   target_date?: string | null
   months_remaining?: number | null
   required_monthly_cents?: number | null
+  underspend_cents?: number
+  categories?: PlanSavingsCategory[]
+  months?: PlanSavingsMonth[]
   monthly_payment_cents?: number
   apr_pct?: number
   strategy?: string
@@ -383,6 +386,29 @@ export interface PlanDerived {
   balance_after_cents?: number
   affordable?: boolean
   shortfall_cents?: number
+  funding?: PlanFunding | null
+}
+
+export interface PlanFunding {
+  category_id: number
+  category_path: string
+  account_id: number | null
+  account_name: string | null
+  in_cents: number
+  out_cents: number
+  net_cents: number
+  transactions: PlanFundingTxn[]
+}
+
+export interface PlanFundingTxn {
+  id: number
+  date: string
+  description: string
+  account_id: number | null
+  account_name: string | null
+  amount_cents: number
+  direction: 'in' | 'out'
+  signed_cents: number
 }
 
 export interface PlanDebt {
@@ -391,6 +417,25 @@ export interface PlanDebt {
   initial_cents: number
   interest_cents: number
   payoff_month: number | null
+}
+
+export interface PlanSavingsCategory {
+  category_id: number
+  name: string
+  depth: number
+  has_children: boolean
+  budget_cents: number
+  actual_cents: number
+  remaining_cents: number
+}
+
+export interface PlanSavingsMonth {
+  month: string
+  kind: 'actual' | 'projected'
+  income_cents: number
+  expense_cents: number
+  net_cents: number
+  cumulative_cents: number
 }
 
 export interface PlanItem {

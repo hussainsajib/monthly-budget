@@ -14,13 +14,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.money import to_cents
-from app.models import TRANSFER, Account, Category, Plan, PlanItem, RecurringTemplate, Transaction
+from app.models import INCOME, TRANSFER, Account, Category, Plan, PlanItem, RecurringTemplate, Transaction
 from app.models.ledger import direction_effect, direction_of
 from app.services import budgets, plan_types
 from app.services.cashflow import balance_at, build_ledger
 from app.services.categories import load_tree
 from app.services.category_config import income_keys
-from app.services.events import ledger_events, manual_events, recurring_events, to_public
+from app.services.events import LEDGER, MANUAL, RECURRING, event_stream, manual_events, recurring_events, to_public
 
 MATCH_WINDOW_DAYS = 5
 DEFAULT_LOOKAHEAD = 2
@@ -28,6 +28,7 @@ MAX_LOOKAHEAD = 6
 HORIZON_DAYS = 180  # how far ahead to look for paychecks
 NO_PAYCHECK_FALLBACK_DAYS = 60
 MAX_PAYOFF_MONTHS = 600
+MAX_SAVINGS_MONTHS = 120  # a savings window is walked month by month; cap it so a bad date can't loop forever
 
 
 class PlanError(ValueError):
@@ -346,10 +347,9 @@ def derive_rolling(db: Session, plan: Plan, tree) -> dict:
 
     # Forward-looking events drive the summary numbers (safe-to-spend, end balance). Rows dated today
     # or earlier are already inside ``opening`` below, so the projection starts after them.
-    summary_events = recurring_events(db, start, end, income_only=True, tree=tree)
-    summary_events += recurring_events(db, start, end, income_only=False, tree=tree)
-    summary_events += [e for e in manual_events(plan, tree) if (e["date"] or start) <= end]
-    summary_events += ledger_events(db, start, end, after=today, account_id=plan.account_id, tree=tree)
+    summary_events = event_stream(
+        db, start=start, end=end, plan=plan, tree=tree, account_id=plan.account_id, after=today
+    )
     summary_events.sort(key=lambda e: (e["date"] or start, e["source"] != "manual"))
 
     opening = build_ledger(db, account).current_balance_cents if account else 0
@@ -365,14 +365,20 @@ def derive_rolling(db: Session, plan: Plan, tree) -> dict:
     # left "planned" when no such transaction exists yet. Income occurrences stay forward-looking;
     # past income shows as the real transactions that recorded it.
     window_start = plan.start_date or date(today.year, today.month, 1)
-    planned = recurring_events(db, start, end, income_only=True, tree=tree)
-    planned += recurring_events(db, window_start, end, income_only=False, tree=tree)
-    planned += [e for e in manual_events(plan, tree) if (e["date"] or start) <= end]
+    planned = event_stream(
+        db, start=start, end=end, sources=(RECURRING,), tree=tree, income_only=True
+    )
+    planned += event_stream(
+        db, start=window_start, end=end, sources=(RECURRING,), tree=tree, income_only=False
+    )
+    planned += event_stream(db, start=start, end=end, sources=(MANUAL,), plan=plan, tree=tree)
     planned = _drift(db, planned)
     matched_ids = {e["matched_transaction_id"] for e in planned if e.get("matched_transaction_id")}
     leftovers = [
         e
-        for e in ledger_events(db, window_start, end, account_id=plan.account_id, tree=tree)
+        for e in event_stream(
+            db, start=window_start, end=end, sources=(LEDGER,), account_id=plan.account_id, tree=tree
+        )
         if e["matched_transaction_id"] not in matched_ids
     ]
     for e in leftovers:
@@ -412,6 +418,63 @@ def derive_rolling(db: Session, plan: Plan, tree) -> dict:
     }
 
 
+def _funding(db: Session, plan: Plan, tree, category_id: int, start: date) -> tuple[int, dict]:
+    """Net funding progress from a category's transactions, with a per-transaction activity list.
+
+    Each transaction is read as a signed effect on its own account (``cash_delta_cents``). Money
+    moving *toward* the plan's target account is a contribution; money moving *away* is spending, so
+    a funding category that is also spent from nets down rather than inflating progress. Without a
+    target account there is no reference point, so every transaction counts as a contribution.
+    """
+    cat = db.get(Category, category_id)
+    is_income = bool(cat and cat.kind == INCOME)
+    target = plan.account_id
+    txns = list(
+        db.scalars(
+            select(Transaction)
+            .where(Transaction.category_id == category_id, Transaction.date >= start)
+            .order_by(Transaction.date, Transaction.id)
+        ).unique()
+    )
+    rows: list[dict] = []
+    in_cents = out_cents = 0
+    for t in txns:
+        delta = t.cash_delta_cents(is_income)
+        if target is None:
+            signed = abs(delta)
+        elif t.account_id == target:
+            signed = delta
+        else:
+            signed = -delta
+        if signed >= 0:
+            in_cents += signed
+        else:
+            out_cents += -signed
+        rows.append(
+            {
+                "id": t.id,
+                "date": t.date.isoformat(),
+                "description": t.description,
+                "account_id": t.account_id,
+                "account_name": t.account.name if t.account else None,
+                "amount_cents": t.amount_cents,
+                "direction": "in" if signed >= 0 else "out",
+                "signed_cents": signed,
+            }
+        )
+    block = {
+        "category_id": category_id,
+        "category_path": tree.path(category_id),
+        "account_id": target,
+        "account_name": plan.account.name if plan.account else None,
+        "in_cents": in_cents,
+        "out_cents": out_cents,
+        "net_cents": in_cents - out_cents,
+        "transactions": rows,
+    }
+    return in_cents - out_cents, block
+
+
 def derive_goal(db: Session, plan: Plan, tree) -> dict:
     config = _config(plan)
     target = int(config.get("target_cents") or 0)
@@ -420,14 +483,11 @@ def derive_goal(db: Session, plan: Plan, tree) -> dict:
     start = plan.start_date or date.today()
 
     funded = 0
+    funding_block = None
     funding_category = config.get("category_id")
     if funding_category:
-        total = db.scalar(
-            select(func.sum(func.abs(Transaction.amount_cents))).where(
-                Transaction.category_id == funding_category, Transaction.date >= start
-            )
-        )
-        funded += int(total or 0)
+        net, funding_block = _funding(db, plan, tree, funding_category, start)
+        funded += net
     funded += sum(e["amount_cents"] for e in manual_events(plan, tree) if e["item_kind"] == "contribution")
 
     remaining = max(target - funded, 0)
@@ -444,6 +504,7 @@ def derive_goal(db: Session, plan: Plan, tree) -> dict:
         "target_date": target_date.isoformat() if target_date else None,
         "months_remaining": months,
         "required_monthly_cents": required_monthly,
+        "funding": funding_block,
         "headline_cents": funded,
         "headline_pct": progress,
     }
@@ -453,6 +514,118 @@ def _months_between(start: date, end: date) -> int:
     if end <= start:
         return 0
     return (end.year - start.year) * 12 + (end.month - start.month) + (1 if end.day > start.day else 0)
+
+
+def _next_month(month: date) -> date:
+    return date(month.year + 1, 1, 1) if month.month == 12 else date(month.year, month.month + 1, 1)
+
+
+def derive_savings(db: Session, plan: Plan, tree) -> dict:
+    """Project a savings plan across every month from the start date to the target date.
+
+    Each month is either *actual* (it has fully passed, so real income and spending are known) or
+    *projected* (the current month and anything ahead, which use the month's budget as the best
+    estimate of what will happen). Summing month-by-month gives the free cash flow across the
+    window - the money that could be set aside - while the per-category budget-vs-actual table only
+    draws on elapsed months, since a future month has no spending to compare against yet. The target
+    maths (funded / remaining / needed-per-month) is the goal plan's, unchanged.
+    """
+    config = _config(plan)
+    target = int(config.get("target_cents") or 0)
+    target_date_raw = config.get("target_date")
+    target_date = date.fromisoformat(target_date_raw) if target_date_raw else None
+
+    today = date.today()
+    current_month = today.replace(day=1)
+    created = plan.created_at.date() if plan.created_at else today
+    start = plan.start_date or created
+    start_month = start.replace(day=1)
+    # Without a target date there is nothing to project forward to, so the window ends this month.
+    end_month = (target_date or today).replace(day=1)
+    if end_month < start_month:
+        end_month = start_month
+
+    income = income_keys(db)
+    months: list[dict] = []
+    categories: dict[int, dict] = {}
+    cumulative = 0
+    cursor = start_month
+    for _ in range(MAX_SAVINGS_MONTHS):
+        if cursor > end_month:
+            break
+        data = budgets.build_month(db, cursor)
+        is_actual = cursor < current_month
+        flow_in = data.income_actual if is_actual else data.income_budget
+        flow_out = data.expense_actual if is_actual else data.expense_budget
+        net = flow_in - flow_out
+        cumulative += net
+        months.append(
+            {
+                "month": cursor.isoformat()[:7],
+                "kind": "actual" if is_actual else "projected",
+                "income_cents": flow_in,
+                "expense_cents": flow_out,
+                "net_cents": net,
+                "cumulative_cents": cumulative,
+            }
+        )
+        if is_actual:
+            for line in data.lines:
+                if line.kind in income:
+                    continue
+                slot = categories.setdefault(
+                    line.category_id,
+                    {
+                        "category_id": line.category_id,
+                        "name": line.name,
+                        "depth": line.depth,
+                        "has_children": line.has_children,
+                        "budget_cents": 0,
+                        "actual_cents": 0,
+                    },
+                )
+                slot["budget_cents"] += line.budget_cents
+                slot["actual_cents"] += line.actual_cents
+        cursor = _next_month(cursor)
+
+    category_rows = list(categories.values())
+    for row in category_rows:
+        row["remaining_cents"] = row["budget_cents"] - row["actual_cents"]
+    # Leaves only, so a parent's rolled-up budget is not counted alongside its children.
+    underspend = sum(r["remaining_cents"] for r in category_rows if not r["has_children"])
+
+    start_for_funding = plan.start_date or created
+    funded = 0
+    funding_block = None
+    funding_category = config.get("category_id")
+    if funding_category:
+        net, funding_block = _funding(db, plan, tree, funding_category, start_for_funding)
+        funded += net
+    funded += sum(e["amount_cents"] for e in manual_events(plan, tree) if e["item_kind"] == "contribution")
+
+    remaining = max(target - funded, 0)
+    n_months = _months_between(today, target_date) if target_date else None
+    required_monthly = (remaining + n_months - 1) // n_months if n_months else None
+    progress = round(funded / target * 100, 1) if target else 0.0
+
+    return {
+        "kind": "savings",
+        "window": {"start": start_month.isoformat()[:7], "end": end_month.isoformat()[:7]},
+        "months": months,
+        "categories": category_rows,
+        "underspend_cents": underspend,
+        "net_cents": cumulative,
+        "target_cents": target,
+        "target_date": target_date.isoformat() if target_date else None,
+        "funded_cents": funded,
+        "remaining_cents": remaining,
+        "progress_pct": progress,
+        "months_remaining": n_months,
+        "required_monthly_cents": required_monthly,
+        "funding": funding_block,
+        "headline_cents": cumulative,
+        "headline_pct": progress,
+    }
 
 
 def derive_debt(db: Session, plan: Plan, tree) -> dict:
@@ -706,6 +879,8 @@ def derive(db: Session, plan: Plan) -> dict:
         body = derive_rolling(db, plan, tree)
     elif plan.type == "goal":
         body = derive_goal(db, plan, tree)
+    elif plan.type == "savings":
+        body = derive_savings(db, plan, tree)
     elif plan.type == "debt":
         body = derive_debt(db, plan, tree)
     elif plan.type == "event":

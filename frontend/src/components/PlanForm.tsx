@@ -329,6 +329,7 @@ export function PlanFormModal({
   const [typeKey, setTypeKey] = useState(plan?.type ?? '')
   const [name, setName] = useState(plan?.name ?? '')
   const [accountId, setAccountId] = useState<number | null>(plan?.account_id ?? null)
+  const [startDate, setStartDate] = useState(plan?.start_date ?? todayIso())
   const [notes, setNotes] = useState(plan?.notes ?? '')
   const [status, setStatus] = useState(plan?.status ?? 'active')
   const [newPaycheck, setNewPaycheck] = useState<NewPaycheckDraft>(emptyPaycheck)
@@ -378,7 +379,7 @@ export function PlanFormModal({
         name,
         type: selected.key,
         account_id: accountId,
-        start_date: plan?.start_date ?? null,
+        start_date: startDate || null,
         end_date: plan?.end_date ?? null,
         notes,
         status,
@@ -430,6 +431,13 @@ export function PlanFormModal({
                 blank="— total / none —"
               />
               <span className="small muted">The balance column follows this account.</span>
+            </div>
+          )}
+          {selected?.key === 'savings' && (
+            <div>
+              <label htmlFor="plan-start">Start date</label>
+              <input id="plan-start" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+              <span className="small muted">The plan projects every month from here to the target date.</span>
             </div>
           )}
           {(selected?.config_fields ?? []).map((f) =>
