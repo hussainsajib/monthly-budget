@@ -122,6 +122,8 @@ class Transaction(Base):
     # (``transfer`` or ``reimbursement``). Set means the row is paired and leaves budgets/reports.
     link_id: Mapped[str | None] = mapped_column(String(36), index=True)
     link_kind: Mapped[str | None] = mapped_column(String(20), index=True)
+    # Balance the bank reported after this row (imported); used to reconcile the running ledger.
+    balance_cents: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     category: Mapped[Category] = relationship(lazy="joined")

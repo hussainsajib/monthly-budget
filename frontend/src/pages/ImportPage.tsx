@@ -153,10 +153,15 @@ export default function ImportPage() {
             category_id: r.category_id,
             key: r.key,
             recurring_template_id: r.recurring_template_id,
+            balance_cents: r.balance_cents,
           })),
         ),
       (r) => `Imported ${r.imported} transaction(s)`,
     )
+    if (done) {
+      const items = (rows ?? []).filter((r) => r.balance_cents != null).map((r) => ({ key: r.key, balance_cents: r.balance_cents as number }))
+      if (items.length) await run(() => api.importBalances(items))
+    }
     setBusy(false)
     if (done) {
       localStorage.removeItem(SESSION_KEY)
@@ -172,7 +177,18 @@ export default function ImportPage() {
       jumpToFirstFix()
       return fail(`${missing.length} ticked row(s) still need a category. They are highlighted; nothing was imported.`)
     }
-    if (chosen.length === 0) return fail('Tick at least one row to import')
+    if (chosen.length === 0) {
+      const items = rows.filter((r) => r.balance_cents != null).map((r) => ({ key: r.key, balance_cents: r.balance_cents as number }))
+      if (items.length === 0) return fail('Tick at least one row to import')
+      setBusy(true)
+      const res = await run(() => api.importBalances(items), (r) => `No new rows; saved bank balances on ${r.updated} existing transaction(s)`)
+      setBusy(false)
+      if (res) {
+        localStorage.removeItem(SESSION_KEY)
+        navigate('/transactions')
+      }
+      return
+    }
     await doImport(chosen)
   }
 

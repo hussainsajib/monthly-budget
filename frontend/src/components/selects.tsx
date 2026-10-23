@@ -374,9 +374,10 @@ interface AccountSelectProps {
   onChange: (id: number | null) => void
   blank?: string
   id?: string
+  clearable?: boolean
 }
 
-export function AccountSelect({ accounts, value, onChange, blank = '— none —', id }: AccountSelectProps) {
+export function AccountSelect({ accounts, value, onChange, blank = '— none —', id, clearable = true }: AccountSelectProps) {
   const options: Option[] = accounts
     .filter((a) => a.is_active || a.id === value)
     .map((a) => ({ value: String(a.id), label: a.is_active ? a.name : `${a.name} (inactive)` }))
@@ -388,7 +389,7 @@ export function AccountSelect({ accounts, value, onChange, blank = '— none —
         menuPortalTarget={document.body}
       styles={selectStyles}
       isSearchable
-      isClearable
+      isClearable={clearable}
       options={options}
       value={options.find((o) => o.value === String(value)) ?? null}
       placeholder={blank}

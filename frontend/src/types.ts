@@ -176,6 +176,7 @@ export interface ImportPreviewRow {
   duplicate: boolean
   key: string
   recurring_template_id: number | null
+  balance_cents: number | null
 }
 
 export interface ImportRule {
@@ -251,6 +252,7 @@ export interface LedgerRow {
   balance_cents: number
   is_planned: boolean
   level: '' | 'warn' | 'low'
+  bank_balance_cents: number | null
 }
 
 export interface Cashflow {

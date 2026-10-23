@@ -1,15 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
-import { useEffect, useState, type FormEvent } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
 import { AccountSelect } from '../components/selects'
 import { Loading } from '../components/ui'
-import { centsToInput, formatMoney } from '../money'
+import { formatMoney } from '../money'
 import { useAccounts } from '../queries'
-import { useRun } from '../toast'
 
 export default function CashflowPage() {
-  const run = useRun()
   const accounts = useAccounts()
   const [accountId, setAccountId] = useState<number | null>(null)
   const flow = useQuery({ queryKey: ['cashflow', accountId], queryFn: () => api.cashflow(accountId) })
@@ -18,27 +16,14 @@ export default function CashflowPage() {
   const isLoan = account?.is_loan ?? false
   /** A loan reads as amount owed, the inverse of its signed ledger balance. */
   const display = (cents: number) => (isLoan ? -cents : cents)
-
-  const [low, setLow] = useState('')
-  const [warn, setWarn] = useState('')
-  useEffect(() => {
-    if (ledger) {
-      setLow(centsToInput(ledger.low_threshold_cents))
-      setWarn(centsToInput(ledger.warn_threshold_cents))
-    }
-  }, [ledger?.low_threshold_cents, ledger?.warn_threshold_cents])
-
-  const saveThresholds = (e: FormEvent) => {
-    e.preventDefault()
-    void run(() => api.setThresholds(low, warn), 'Alert levels saved')
-  }
+  const showBank = !isLoan && (ledger?.rows.some((r) => r.bank_balance_cents != null) ?? false)
 
   return (
     <>
       <h1>Cash flow</h1>
 
-      <div className="card row">
-        <div>
+      <div className="row report-head">
+        <div className="head-field">
           <label htmlFor="cf-account">Account</label>
           <AccountSelect
             id="cf-account"
@@ -46,26 +31,11 @@ export default function CashflowPage() {
             value={accountId ?? account?.id ?? null}
             onChange={setAccountId}
             blank="Choose account…"
+            clearable={false}
           />
         </div>
-      </div>
-
-      <Loading query={flow} />
-      {flow.data && !account && (
-        <div className="card">
-          No accounts yet. <Link to="/settings/accounts">Add one</Link>.
-        </div>
-      )}
-
-      {account && ledger && (
-        <>
-          {!account.opening_date && (
-            <div className="flash err">
-              Set an opening balance and date for <b>{account.name}</b> on the{' '}
-              <Link to="/settings/accounts">Accounts</Link> tab; the running balance starts from there.
-            </div>
-          )}
-          <div className="card stat">
+        {account && ledger && (
+          <div className="stat">
             <div>
               <span className="muted small">{isLoan ? 'Owed today' : 'Balance today'}</span>
               <b>{formatMoney(display(ledger.current_balance_cents))}</b>
@@ -86,23 +56,24 @@ export default function CashflowPage() {
               </div>
             )}
           </div>
+        )}
+      </div>
 
-          {!isLoan && (
-            <form className="card row" onSubmit={saveThresholds}>
-              <div>
-                <label htmlFor="cf-low">Red below ($)</label>
-                <input id="cf-low" type="text" inputMode="decimal" value={low} onChange={(e) => setLow(e.target.value)} />
-              </div>
-              <div>
-                <label htmlFor="cf-warn">Orange below ($)</label>
-                <input id="cf-warn" type="text" inputMode="decimal" value={warn} onChange={(e) => setWarn(e.target.value)} />
-              </div>
-              <button className="secondary shrink" type="submit">
-                Save alert levels
-              </button>
-            </form>
+      <Loading query={flow} />
+      {flow.data && !account && (
+        <div className="card">
+          No accounts yet. <Link to="/settings/accounts">Add one</Link>.
+        </div>
+      )}
+
+      {account && ledger && (
+        <>
+          {!account.opening_date && (
+            <div className="flash err">
+              Set an opening balance and date for <b>{account.name}</b> on the{' '}
+              <Link to="/settings/accounts">Accounts</Link> tab; the running balance starts from there.
+            </div>
           )}
-
           <p className="small muted">
             Future-dated transactions (for example from <Link to="/settings/recurring">recurring items</Link>) show as
             planned.
@@ -123,10 +94,11 @@ export default function CashflowPage() {
                   <th className="num">{isLoan ? 'Paid' : 'In'}</th>
                   <th className="num">{isLoan ? 'Charged' : 'Out'}</th>
                   <th className="num">{isLoan ? 'Owed' : 'Balance'}</th>
+                  {showBank && <th className="num">Bank</th>}
                 </tr>
               </thead>
               <tbody>
-                {ledger.rows.map((r) => (
+                {[...ledger.rows].reverse().map((r) => (
                   <tr key={r.txn_id} className={`${isLoan ? '' : r.level} ${r.is_planned ? 'planned' : ''}`}>
                     <td>{r.date}</td>
                     <td>
@@ -139,11 +111,23 @@ export default function CashflowPage() {
                     <td className="num">
                       <b>{formatMoney(display(r.balance_cents))}</b>
                     </td>
+                    {showBank && (
+                      <td
+                        className={`num${r.bank_balance_cents != null && r.bank_balance_cents !== r.balance_cents ? ' over' : ''}`}
+                        title={
+                          r.bank_balance_cents != null && r.bank_balance_cents !== r.balance_cents
+                            ? `Ledger is off by ${formatMoney(r.balance_cents - r.bank_balance_cents)}`
+                            : undefined
+                        }
+                      >
+                        {r.bank_balance_cents != null ? formatMoney(r.bank_balance_cents) : ''}
+                      </td>
+                    )}
                   </tr>
                 ))}
                 {ledger.rows.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="muted">
+                    <td colSpan={showBank ? 6 : 5} className="muted">
                       No transactions on this account since its opening date.
                     </td>
                   </tr>

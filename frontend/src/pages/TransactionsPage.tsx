@@ -94,14 +94,14 @@ const COL_WIDTH: Record<string, string> = {
 
 function TableSkeleton({ levels }: { levels: string[] }) {
   const heads: Array<{ label: string; width?: string; cls?: string }> = [
-    { label: 'Date', width: COL_WIDTH.date },
     { label: '', width: COL_WIDTH.select },
+    { label: 'Date', width: COL_WIDTH.date },
     { label: 'Description' },
     ...levels.map((l, i) => ({ label: l, width: COL_WIDTH[`category_${i}`] })),
     { label: 'Account', width: COL_WIDTH.account, cls: 'hide-sm' },
     { label: 'Amount', width: COL_WIDTH.amount, cls: 'num' },
   ]
-  const barWidths = heads.map((_, i) => (i === 0 ? 70 : i === 1 ? 16 : i === 2 ? 240 : 90))
+  const barWidths = heads.map((_, i) => (i === 0 ? 16 : i === 1 ? 70 : i === 2 ? 240 : 90))
   return (
     <table className="txn-table">
       <thead>
@@ -385,6 +385,30 @@ export default function TransactionsPage() {
 
   const columns: ColumnDef<Txn>[] = [
     {
+      id: 'select',
+      enableSorting: false,
+      header: () => (
+        <input
+          type="checkbox"
+          aria-label="Select all on this page"
+          checked={items.length > 0 && items.every((i) => selected.has(i.id))}
+          onChange={(e) =>
+            setSelected(e.target.checked ? new Set(items.map((i) => i.id)) : new Set())
+          }
+        />
+      ),
+      cell: ({ row }) => (
+        <input
+          type="checkbox"
+          aria-label={`Select ${row.original.description}`}
+          checked={selected.has(row.original.id)}
+          onChange={(e) => toggleSelected(row.original.id, e.target.checked)}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        />
+      ),
+    },
+    {
       id: 'date',
       accessorKey: 'date',
       header: ({ column }) => (
@@ -420,30 +444,6 @@ export default function TransactionsPage() {
         </span>
       ),
       cell: ({ row }) => row.original.date,
-    },
-    {
-      id: 'select',
-      enableSorting: false,
-      header: () => (
-        <input
-          type="checkbox"
-          aria-label="Select all on this page"
-          checked={items.length > 0 && items.every((i) => selected.has(i.id))}
-          onChange={(e) =>
-            setSelected(e.target.checked ? new Set(items.map((i) => i.id)) : new Set())
-          }
-        />
-      ),
-      cell: ({ row }) => (
-        <input
-          type="checkbox"
-          aria-label={`Select ${row.original.description}`}
-          checked={selected.has(row.original.id)}
-          onChange={(e) => toggleSelected(row.original.id, e.target.checked)}
-          onClick={(e) => e.stopPropagation()}
-          onKeyDown={(e) => e.stopPropagation()}
-        />
-      ),
     },
     {
       id: 'description',

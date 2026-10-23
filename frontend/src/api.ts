@@ -132,6 +132,8 @@ export const api = {
   importPreview: (form: FormData) => post<ImportPreviewRow[]>('/import/preview', form),
   importCommit: (accountId: number | null, rows: Omit<ImportPreviewRow, 'duplicate'>[]) =>
     post<{ imported: number }>('/import/commit', { account_id: accountId, rows }),
+  importBalances: (items: { key: string; balance_cents: number }[]) =>
+    post<{ updated: number }>('/import/balances', { items }),
   applyImportRules: (
     accountId: number | null,
     rows: Pick<ImportPreviewRow, 'date' | 'description' | 'amount_cents' | 'direction' | 'category_id'>[],
@@ -163,6 +165,7 @@ export const api = {
 
   report: (month: number | null) => get<Report>(`/reports${qs({ month })}`),
   cashflow: (accountId: number | null) => get<Cashflow>(`/cashflow${qs({ account_id: accountId })}`),
+  thresholds: () => get<{ low_balance_cents: number; warn_balance_cents: number }>('/settings/thresholds'),
   setThresholds: (low: string, warn: string) =>
     put<{ low_balance_cents: number; warn_balance_cents: number }>('/settings/thresholds', { low, warn }),
   categoryConfig: () => get<CategoryConfig>('/settings/category-config'),

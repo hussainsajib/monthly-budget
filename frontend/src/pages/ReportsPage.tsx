@@ -45,7 +45,7 @@ export default function ReportsPage() {
     <>
       <h1>Budget tracker{range ? ` — ${range}` : ''}</h1>
 
-      <div className="card row">
+      <div className="row report-head">
         <MonthField
           id="rep-month"
           label="Month for category chart"

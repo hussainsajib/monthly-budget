@@ -48,6 +48,7 @@ from app.services.recurring import list_templates, validate_schedule
 from app.services.reference import (
     LOW_BALANCE_KEY,
     WARN_BALANCE_KEY,
+    get_int_setting,
     list_accounts,
     set_int_setting,
 )
@@ -925,6 +926,7 @@ class ImportRow(BaseModel):
     category_id: int
     key: str
     recurring_template_id: int | None = None
+    balance_cents: int | None = None
 
 
 class ImportCommitBody(BaseModel):
@@ -956,6 +958,7 @@ async def import_preview(
             "category_id": r.category_id,
             "duplicate": r.duplicate,
             "key": r.key,
+            "balance_cents": r.balance_cents,
         }
         for r in rows
     ]
@@ -979,10 +982,25 @@ def import_commit(body: ImportCommitBody, db: Session = Depends(get_db)):
             category_id=r.category_id,
             key=r.key,
             recurring_template_id=r.recurring_template_id,
+            balance_cents=r.balance_cents,
         )
         for r in body.rows
     ]
     return {"imported": importing.commit_rows(db, parsed, body.account_id)}
+
+
+class BalanceItem(BaseModel):
+    key: str
+    balance_cents: int
+
+
+class BalanceBackfillBody(BaseModel):
+    items: list[BalanceItem]
+
+
+@router.post("/import/balances")
+def import_balances(body: BalanceBackfillBody, db: Session = Depends(get_db)):
+    return {"updated": importing.backfill_balances(db, [(i.key, i.balance_cents) for i in body.items])}
 
 
 class ApplyRulesRow(BaseModel):
@@ -1238,6 +1256,7 @@ def get_cashflow(db: Session = Depends(get_db), account_id: int | None = None):
             "balance_cents": r.balance_cents,
             "is_planned": r.is_planned,
             "level": r.level,
+            "bank_balance_cents": r.txn.balance_cents,
         }
 
     return {
@@ -1259,6 +1278,14 @@ def get_cashflow(db: Session = Depends(get_db), account_id: int | None = None):
 class ThresholdsBody(BaseModel):
     low: str
     warn: str
+
+
+@router.get("/settings/thresholds")
+def get_thresholds(db: Session = Depends(get_db)):
+    return {
+        "low_balance_cents": get_int_setting(db, LOW_BALANCE_KEY, 50_000),
+        "warn_balance_cents": get_int_setting(db, WARN_BALANCE_KEY, 100_000),
+    }
 
 
 @router.put("/settings/thresholds")

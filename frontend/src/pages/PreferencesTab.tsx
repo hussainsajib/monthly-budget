@@ -1,6 +1,8 @@
+import { useQuery } from '@tanstack/react-query'
 import { useEffect, useState, type FormEvent } from 'react'
 import { api } from '../api'
 import { Loading } from '../components/ui'
+import { centsToInput } from '../money'
 import { useAccountConfig, useCategoryConfig } from '../queries'
 import { useRun } from '../toast'
 
@@ -10,6 +12,16 @@ export default function PreferencesTab() {
   const run = useRun()
   const config = query.data
   const [levels, setLevels] = useState<string[]>([])
+  const thresholds = useQuery({ queryKey: ['thresholds'], queryFn: api.thresholds })
+  const [low, setLow] = useState('')
+  const [warn, setWarn] = useState('')
+
+  useEffect(() => {
+    if (thresholds.data) {
+      setLow(centsToInput(thresholds.data.low_balance_cents))
+      setWarn(centsToInput(thresholds.data.warn_balance_cents))
+    }
+  }, [thresholds.data])
 
   useEffect(() => {
     if (config) setLevels(config.levels)
@@ -20,6 +32,11 @@ export default function PreferencesTab() {
   async function save(e: FormEvent) {
     e.preventDefault()
     await run(() => api.setLevels(levels), 'Saved')
+  }
+
+  async function saveThresholds(e: FormEvent) {
+    e.preventDefault()
+    await run(() => api.setThresholds(low, warn), 'Alert levels saved')
   }
 
   return (
@@ -47,6 +64,26 @@ export default function PreferencesTab() {
                   />
                 </div>
               ))}
+            </div>
+            <div style={{ marginTop: 12 }}>
+              <button type="submit">Save</button>
+            </div>
+          </form>
+
+          <form className="card" onSubmit={saveThresholds}>
+            <h2 style={{ marginTop: 0 }}>Cash flow alert levels</h2>
+            <p className="small muted">
+              Running balances on the Cash flow page turn orange below the warning level and red below the low level.
+            </p>
+            <div className="grid">
+              <div>
+                <label htmlFor="pref-low">Red below ($)</label>
+                <input id="pref-low" type="text" inputMode="decimal" value={low} onChange={(e) => setLow(e.target.value)} />
+              </div>
+              <div>
+                <label htmlFor="pref-warn">Orange below ($)</label>
+                <input id="pref-warn" type="text" inputMode="decimal" value={warn} onChange={(e) => setWarn(e.target.value)} />
+              </div>
             </div>
             <div style={{ marginTop: 12 }}>
               <button type="submit">Save</button>

@@ -24,6 +24,7 @@ DESC_HEADERS = ("description", "payee", "merchant", "details", "memo", "name")
 OUT_HEADERS = ("withdrawal", "withdrawals", "debit", "money out", "out", "paid out")
 IN_HEADERS = ("deposit", "deposits", "credit", "money in", "in", "paid in")
 AMOUNT_HEADERS = ("amount", "cad$", "amount (cad)")
+BALANCE_HEADERS = ("balance", "running balance", "available balance", "account balance")
 
 
 class ImportError_(ValueError):
@@ -40,6 +41,7 @@ class ParsedRow:
     duplicate: bool = False
     key: str = ""
     recurring_template_id: int | None = None
+    balance_cents: int | None = None
 
 
 def parse_date(text: str) -> date:
@@ -79,13 +81,14 @@ def parse_csv(content: bytes, positive_is_expense: bool = True) -> list[ParsedRo
         raise ImportError_("The file is empty")
 
     if _looks_like_date(rows[0][0]):
-        date_i, desc_i, out_i, in_i, amt_i, data = 0, 1, 2, 3, None, rows
+        date_i, desc_i, out_i, in_i, amt_i, bal_i, data = 0, 1, 2, 3, None, 4, rows
     else:
         headers = [h.strip().lower() for h in rows[0]]
         date_i = _find(headers, DATE_HEADERS)
         desc_i = _find(headers, DESC_HEADERS)
         out_i, in_i = _find(headers, OUT_HEADERS), _find(headers, IN_HEADERS)
         amt_i = _find(headers, AMOUNT_HEADERS)
+        bal_i = _find(headers, BALANCE_HEADERS)
         if date_i is None or desc_i is None or (amt_i is None and out_i is None and in_i is None):
             raise ImportError_(
                 f"Could not find Date / Description / Amount columns. Headers seen: {', '.join(rows[0])}"
@@ -112,8 +115,14 @@ def parse_csv(content: bytes, positive_is_expense: bool = True) -> list[ParsedRo
                 continue
         except ValueError as exc:
             raise ImportError_(f"Row {line_no}: {exc}") from exc
+        balance = None
+        if cell(row, bal_i):
+            try:
+                balance = to_cents(cell(row, bal_i))
+            except ValueError:
+                balance = None
         if cents:
-            parsed.append(ParsedRow(when, description, cents, direction))
+            parsed.append(ParsedRow(when, description, cents, direction, balance_cents=balance))
     return parsed
 
 
@@ -178,6 +187,20 @@ def apply_rules(db: Session, rows: list[ParsedRow], account_id: int | None) -> N
         )
 
 
+def backfill_balances(db: Session, items: list[tuple[str, int]]) -> int:
+    """Store bank balances on already-imported rows (matched by import key); returns rows updated."""
+    if not items:
+        return 0
+    wanted = dict(items)
+    updated = 0
+    for txn in db.scalars(select(Transaction).where(Transaction.import_hash.in_(list(wanted)))).unique():
+        if txn.balance_cents != wanted[txn.import_hash]:
+            txn.balance_cents = wanted[txn.import_hash]
+            updated += 1
+    db.commit()
+    return updated
+
+
 def commit_rows(db: Session, rows: list[ParsedRow], account_id: int | None) -> int:
     kinds = {c.id: c.kind for c in db.scalars(select(Category))}
     income = income_keys(db)
@@ -205,6 +228,7 @@ def commit_rows(db: Session, rows: list[ParsedRow], account_id: int | None) -> i
                 amount_cents=amount_cents,
                 import_hash=row.key,
                 recurring_template_id=row.recurring_template_id,
+                balance_cents=row.balance_cents,
             )
         )
     db.commit()
