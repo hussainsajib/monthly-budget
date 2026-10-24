@@ -1,5 +1,5 @@
 import { Suspense, lazy } from 'react'
-import { NavLink, Navigate, Outlet, Route, Routes } from 'react-router-dom'
+import { Link, NavLink, Navigate, Outlet, Route, Routes } from 'react-router-dom'
 import { Bar } from './components/table'
 
 // Each page is a separate chunk so the shell stays small and vendors are shared.
@@ -13,6 +13,7 @@ const ImportRulesTab = lazy(() => import('./pages/ImportRulesTab'))
 const LoanDetailPage = lazy(() => import('./pages/LoanDetailPage'))
 const LoansPage = lazy(() => import('./pages/LoansPage'))
 const LoanTypesTab = lazy(() => import('./pages/LoanTypesTab'))
+const NetBreakdownPage = lazy(() => import('./pages/NetBreakdownPage'))
 const PlanDetailPage = lazy(() => import('./pages/PlanDetailPage'))
 const PlanPage = lazy(() => import('./pages/PlanPage'))
 const PreferencesTab = lazy(() => import('./pages/PreferencesTab'))
@@ -25,24 +26,28 @@ const TransactionsPage = lazy(() => import('./pages/TransactionsPage'))
 const LINKS = [
   { to: '/transactions', label: 'Transactions' },
   { to: '/budget', label: 'Budget' },
-  { to: '/reports', label: 'Report' },
   { to: '/cashflow', label: 'Cash flow' },
   { to: '/loans', label: 'Loans' },
   { to: '/plan', label: 'Plan' },
-  { to: '/settings', label: 'Settings' },
+  { to: '/reports', label: 'Report' },
 ]
+
+const linkClass = ({ isActive }: { isActive: boolean }) => `link${isActive ? ' active' : ''}`
 
 function Layout() {
   return (
     <>
-      <nav>
+      <nav aria-label="Primary">
         <div className="inner">
-          <span className="brand">Monthly Budget</span>
+          <Link to="/" className="brand">Monthly Budget</Link>
           {LINKS.map((l) => (
-            <NavLink key={l.to} to={l.to} className={({ isActive }) => `link${isActive ? ' active' : ''}`}>
+            <NavLink key={l.to} to={l.to} className={linkClass}>
               {l.label}
             </NavLink>
           ))}
+          <NavLink to="/settings" className={(s) => `${linkClass(s)} push`} aria-label="Settings" title="Settings">
+            <span className="nav-icon" aria-hidden="true" />
+          </NavLink>
         </div>
       </nav>
       <main>
@@ -64,6 +69,7 @@ export default function App() {
         <Route path="import" element={<ImportPage />} />
         <Route path="budget" element={<BudgetPage />} />
         <Route path="reports" element={<ReportsPage />} />
+        <Route path="reports/net/:month" element={<NetBreakdownPage />} />
         <Route path="cashflow" element={<CashflowPage />} />
         <Route path="loans" element={<LoansPage />} />
         <Route path="loans/:id" element={<LoanDetailPage />} />

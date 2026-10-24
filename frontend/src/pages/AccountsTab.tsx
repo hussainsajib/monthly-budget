@@ -1,8 +1,9 @@
-import { flexRender, getCoreRowModel, useReactTable, type ColumnDef, type SortingState } from '@tanstack/react-table'
+import { type ColumnDef, type SortingState } from '@tanstack/react-table'
 import { Archive, ArchiveRestore, Pencil, Trash, X } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
+import { DataTable } from '../components/DataTable'
 import { Bar, SortHeader } from '../components/table'
 import { Modal, ViewToggle, useViewMode } from '../components/ui'
 import { centsToInput, formatMoney } from '../money'
@@ -84,46 +85,6 @@ function DraftFields({ draft, onChange, idPrefix }: { draft: Draft; onChange: (d
         />
       </div>
     </>
-  )
-}
-
-function AccountsSkeleton() {
-  const columns: Array<[number, string]> = [
-    [180, ''],
-    [90, ''],
-    [96, 'num'],
-    [104, 'hide-sm'],
-    [104, 'num'],
-    [80, 'num'],
-    [96, 'num hide-sm'],
-  ]
-  return (
-    <table>
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Type</th>
-          <th className="num">Opening</th>
-          <th className="hide-sm">Opening date</th>
-          <th className="num">Balance</th>
-          <th className="num">Transactions</th>
-          <th className="num hide-sm">Activity</th>
-          <th />
-        </tr>
-      </thead>
-      <tbody>
-        {Array.from({ length: 6 }).map((_, row) => (
-          <tr key={row}>
-            {columns.map(([w, cls], col) => (
-              <td key={col} className={cls}>
-                <Bar w={w} />
-              </td>
-            ))}
-            <td />
-          </tr>
-        ))}
-      </tbody>
-    </table>
   )
 }
 
@@ -293,6 +254,7 @@ export default function AccountsTab() {
   const columns: ColumnDef<Account>[] = [
     {
       id: 'name',
+      meta: { label: 'Name', skeletonWidth: 180 },
       accessorKey: 'name',
       header: ({ column }) => <SortHeader column={column} label="Name" />,
       cell: ({ row }) => {
@@ -307,6 +269,7 @@ export default function AccountsTab() {
     },
     {
       id: 'kind',
+      meta: { label: 'Type', skeletonWidth: 90 },
       accessorKey: 'kind',
       header: ({ column }) => <SortHeader column={column} label="Type" />,
       cell: ({ row }) => (
@@ -317,18 +280,21 @@ export default function AccountsTab() {
     },
     {
       id: 'opening',
+      meta: { className: 'num', label: 'Opening', skeletonWidth: 96 },
       accessorKey: 'opening_balance_cents',
       header: ({ column }) => <SortHeader column={column} label="Opening" />,
       cell: ({ row }) => formatMoney(displayOpening(row.original)),
     },
     {
       id: 'opening_date',
+      meta: { className: 'hide-sm', label: 'Opening date', skeletonWidth: 104 },
       accessorKey: 'opening_date',
       header: ({ column }) => <SortHeader column={column} label="Opening date" />,
       cell: ({ row }) => row.original.opening_date ?? <span className="empty-cell">—</span>,
     },
     {
       id: 'balance',
+      meta: { className: 'num', label: 'Balance', skeletonWidth: 104 },
       accessorKey: 'current_balance_cents',
       header: ({ column }) => <SortHeader column={column} label="Balance" />,
       cell: ({ row }) => {
@@ -353,6 +319,7 @@ export default function AccountsTab() {
     },
     {
       id: 'transactions',
+      meta: { className: 'num', label: 'Transactions', skeletonWidth: 80 },
       accessorKey: 'transaction_count',
       header: ({ column }) => <SortHeader column={column} label="Transactions" />,
       cell: ({ row }) => {
@@ -373,6 +340,7 @@ export default function AccountsTab() {
     },
     {
       id: 'activity',
+      meta: { className: 'num hide-sm', label: 'Activity', skeletonWidth: 96 },
       accessorKey: 'transacted_cents',
       header: ({ column }) => <SortHeader column={column} label="Activity" />,
       cell: ({ row }) =>
@@ -411,22 +379,6 @@ export default function AccountsTab() {
       },
     },
   ]
-
-  const table = useReactTable({
-    data: accounts,
-    columns,
-    state: { sorting },
-    onSortingChange: setSorting,
-    manualSorting: true,
-    getCoreRowModel: getCoreRowModel(),
-  })
-
-  const cellClass = (id: string) => {
-    if (id === 'opening_date') return 'hide-sm'
-    if (id === 'opening' || id === 'balance' || id === 'transactions') return 'num'
-    if (id === 'activity') return 'num hide-sm'
-    return ''
-  }
 
   return (
     <>
@@ -539,9 +491,7 @@ export default function AccountsTab() {
         view === 'card' ? (
           <AccountsTilesSkeleton />
         ) : (
-          <div className="card table-wrap">
-            <AccountsSkeleton />
-          </div>
+          <DataTable columns={columns} data={[]} loading />
         )
       ) : accounts.length === 0 ? (
         <div className="card">
@@ -554,31 +504,13 @@ export default function AccountsTab() {
           ))}
         </div>
       ) : (
-        <div className="card table-wrap">
-          <table>
-            <thead>
-              {table.getHeaderGroups().map((headerGroup) => (
-                <tr key={headerGroup.id}>
-                  {headerGroup.headers.map((header) => (
-                    <th key={header.id} className={cellClass(header.column.id)}>
-                      {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                    </th>
-                  ))}
-                </tr>
-              ))}
-            </thead>
-            <tbody>
-              {table.getRowModel().rows.map((row) => (
-                <tr key={row.id}>
-                  {row.getVisibleCells().map((cell) => (
-                    <td key={cell.id} className={cellClass(cell.column.id)}>
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
+        <DataTable
+          columns={columns}
+          data={accounts}
+          sorting={sorting}
+          onSortingChange={setSorting}
+          footer={
+            <>
               <tr className="total-row">
                 <td colSpan={4}>{plural(active.length, 'active account')}</td>
                 <td className="num">{formatMoney(activeCash)}</td>
@@ -593,9 +525,9 @@ export default function AccountsTab() {
                   <td className="num hide-sm" />
                 </tr>
               )}
-            </tfoot>
-          </table>
-        </div>
+            </>
+          }
+        />
       )}
     </>
   )

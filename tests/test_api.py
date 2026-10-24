@@ -528,6 +528,51 @@ def test_report_and_cashflow_shapes(client, ids):
     assert flow["ledger"]["rows"][0]["delta_cents"] == -3955
 
 
+def test_net_breakdown_sums_to_the_net_difference(client, ids):
+    cats, accs = ids
+    as_of = "2026-05-15"
+    client.post("/api/transactions", json=_txn_body(cats, accs, amount="100"))
+    client.post("/api/transactions", json=_txn_body(cats, accs, amount="50", date="2026-05-20"))
+    client.post("/api/transactions", json=_txn_body(cats, accs, category_id=cats["Other Income"], amount="500"))
+    client.post(
+        "/api/transfers",
+        json={
+            "date": "2026-05-05",
+            "amount": "75",
+            "from_account_id": accs["Chequing"],
+            "to_account_id": accs["Savings"],
+        },
+    )
+
+    data = client.get("/api/reports/net/2026-05", params={"as_of": as_of}).json()
+    assert data["month"] == "2026-05"
+    assert data["next"] is None and data["previous"] == "2026-04"
+    assert data["net_diff"] == data["net_actual"] - data["net_budget"]
+    roots = [r for r in data["rows"] if r["depth"] == 0]
+    assert sum(r["effect_cents"] for r in roots) == data["net_diff"]
+
+    takeout = next(r for r in data["rows"] if r["category_id"] == cats["Dining Out / Takeout"])
+    assert takeout["actual_cents"] == 10000  # the future-dated 50.00 is not counted
+    assert takeout["effect_cents"] == takeout["budget_cents"] - 10000
+    income = next(r for r in data["rows"] if r["category_id"] == cats["Other Income"])
+    assert income["effect_cents"] == 50000 - income["budget_cents"]
+
+    txns = client.get(
+        "/api/reports/net/2026-05/transactions", params={"category_id": takeout["category_id"], "as_of": as_of}
+    ).json()
+    assert sum(t["amount_cents"] for t in txns) == takeout["actual_cents"]
+    for row in data["rows"]:
+        if row["has_children"]:
+            continue
+        got = client.get(
+            "/api/reports/net/2026-05/transactions", params={"category_id": row["category_id"], "as_of": as_of}
+        ).json()
+        assert sum(t["amount_cents"] for t in got) == row["actual_cents"]
+
+    outside = client.get("/api/reports/net/2025-01", params={"as_of": as_of})
+    assert outside.status_code == 400 and "outside the report window" in outside.json()["detail"]
+
+
 def test_thresholds_roundtrip(client, ids):
     _, accs = ids
 

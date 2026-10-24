@@ -5,7 +5,8 @@ import { useNavigate } from 'react-router-dom'
 import { Tooltip } from 'react-tooltip'
 import { api } from '../api'
 import { AccountSelect, CategoryFilter, CategorySelect } from '../components/selects'
-import { AddImportRuleModal, type RuleDraft } from '../components/ImportRuleDialog'
+import { ActionMenu } from '../components/ActionMenu'
+import { AddImportRuleModal, UpdateImportRuleModal, type RuleDraft } from '../components/ImportRuleDialog'
 import { NO_FILTERS, isFiltered, makeRowMatcher, type ImportFilters } from '../importFilter'
 import { centsToInput, formatMoney } from '../money'
 import { useAccounts, useImportCategories } from '../queries'
@@ -40,6 +41,7 @@ export default function ImportPage() {
   const [bulkCategory, setBulkCategory] = useState<number | null>(null)
   const [onlyUnassigned, setOnlyUnassigned] = useState(true)
   const [ruleDraft, setRuleDraft] = useState<RuleDraft | null>(null)
+  const [updateDraft, setUpdateDraft] = useState<RuleDraft | null>(null)
   const restoredRef = useRef(false)
 
   /** Fill blank categories from the current rules/history; manual picks are left untouched. */
@@ -124,6 +126,15 @@ export default function ImportPage() {
 
   const patch = (index: number, change: Partial<Row>) =>
     setRows((rs) => rs && rs.map((r, i) => (i === index ? { ...r, ...change } : r)))
+
+  useEffect(() => {
+    if (!isFiltered(filters)) return
+    const matches = makeRowMatcher(filters, categories.data ?? [])
+    setRows((rs) => {
+      if (!rs || rs.every((r) => !r.include || matches(r))) return rs
+      return rs.map((r) => (r.include && !matches(r) ? { ...r, include: false } : r))
+    })
+  }, [filters, categories.data])
 
   const needsFix = (r: Row) => r.include && r.category_id === null
 
@@ -456,16 +467,17 @@ export default function ImportPage() {
                   </td>
                   <td>{r.duplicate && <span className="chip">possible duplicate</span>}</td>
                   <td className="num">
-                    <button
-                      type="button"
-                      className="icon-btn ghost"
-                      aria-label={`Create an import rule from ${r.description}`}
-                      data-tooltip-id="import-tip"
-                      data-tooltip-content="Create an import rule from this row"
-                      onClick={() => setRuleDraft(draftFromRow(r))}
+                    <ActionMenu
+                      label={`Import rule from ${r.description}`}
+                      tooltipId="import-tip"
+                      tooltip="Create or update an import rule"
+                      items={[
+                        { key: 'new', label: 'Create new rule', onSelect: () => setRuleDraft(draftFromRow(r)) },
+                        { key: 'update', label: 'Update existing rule', onSelect: () => setUpdateDraft(draftFromRow(r)) },
+                      ]}
                     >
                       <Filter size={16} />
-                    </button>
+                    </ActionMenu>
                   </td>
                 </tr>
               ))}
@@ -493,6 +505,9 @@ export default function ImportPage() {
 
         {ruleDraft && (
           <AddImportRuleModal initial={ruleDraft} onClose={() => setRuleDraft(null)} onAdded={applyRulesToPreview} />
+        )}
+        {updateDraft && (
+          <UpdateImportRuleModal row={updateDraft} onClose={() => setUpdateDraft(null)} onUpdated={applyRulesToPreview} />
         )}
         <Tooltip id="import-tip" />
       </>

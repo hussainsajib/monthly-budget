@@ -239,3 +239,70 @@ def chart_payload(report: BudgetReport, month_index: int) -> dict:
         "category_actual": [dollars(t[1]) for t in top],
         "category_budget": [dollars(t[2]) for t in top],
     }
+
+
+def net_breakdown(db: Session, month: date, as_of: date | None = None) -> dict:
+    """What moved NET (income - expenses) away from its budget in ``month``, category by category.
+
+    ``effect_cents`` is signed by what it did to NET: income above budget and spending below budget
+    are positive, so the root rows' effects add up to ``net_actual - net_budget`` exactly.
+    """
+    report = budget_report(db, as_of=as_of)
+    position = {d: i for i, d in enumerate(report.window)}
+    if month not in position:
+        first, last = report.months[0], report.months[-1]
+        raise ValueError(f"{month.strftime('%Y-%m')} is outside the report window ({first} to {last})")
+    i = position[month]
+    net_budget = report.income_budgets[i] - report.expense_budgets[i]
+    net_actual = report.net_months[i]
+    rows = [
+        {
+            "category_id": r.category_id,
+            "name": r.name,
+            "depth": r.depth,
+            "kind": r.kind,
+            "is_income": r.is_income,
+            "has_children": r.has_children,
+            "budget_cents": r.budgets[i],
+            "actual_cents": r.months[i],
+            "effect_cents": (r.months[i] - r.budgets[i]) if r.is_income else (r.budgets[i] - r.months[i]),
+        }
+        for r in report.rows
+    ]
+    months = report.months
+    return {
+        "month": months[i],
+        "months": months,
+        "previous": months[i - 1] if i > 0 else None,
+        "next": months[i + 1] if i + 1 < len(months) else None,
+        "income_budget": report.income_budgets[i],
+        "income_actual": report.income_months[i],
+        "expense_budget": report.expense_budgets[i],
+        "expense_actual": report.expense_months[i],
+        "net_budget": net_budget,
+        "net_actual": net_actual,
+        "net_diff": net_actual - net_budget,
+        "rows": rows,
+    }
+
+
+def net_transactions(db: Session, month: date, category_id: int, as_of: date | None = None) -> list[Transaction]:
+    """The transactions counted in a category's (rolled-up) Actual for ``month`` - same rules as the report."""
+    as_of = as_of or date.today()
+    node = load_tree(db).nodes.get(category_id)
+    if node is None:
+        raise ValueError("Category not found")
+    next_month = date(month.year + (month.month == 12), month.month % 12 + 1, 1)
+    stmt = (
+        select(Transaction)
+        .where(
+            Transaction.category_id.in_(node.subtree_ids()),
+            Transaction.date >= month,
+            Transaction.date < next_month,
+            Transaction.date <= as_of,
+            Transaction.link_id.is_(None),
+            ~Transaction.category.has(Category.kind == TRANSFER),
+        )
+        .order_by(Transaction.date.desc(), Transaction.id.desc())
+    )
+    return list(db.scalars(stmt).unique())

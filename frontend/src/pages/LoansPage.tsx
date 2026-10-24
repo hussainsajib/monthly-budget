@@ -1,9 +1,10 @@
-import { flexRender, getCoreRowModel, useReactTable, type ColumnDef, type SortingState } from '@tanstack/react-table'
+import { type ColumnDef, type SortingState } from '@tanstack/react-table'
 import { HandCoins, Pencil } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Tooltip } from 'react-tooltip'
 import { Tooltip as ChartTip, ResponsiveContainer, Area, AreaChart, CartesianGrid, XAxis, YAxis } from 'recharts'
+import { DataTable } from '../components/DataTable'
 import { Bar, SortHeader } from '../components/table'
 import { LoanFormModal, LoanPaymentModal } from '../components/LoanForm'
 import { ViewToggle, useViewMode } from '../components/ui'
@@ -103,48 +104,6 @@ function TrendChart({ trend }: { trend: LoanTrendPoint[] }) {
   )
 }
 
-function LoansSkeleton() {
-  const widths: Array<[number, string]> = [
-    [180, ''],
-    [90, ''],
-    [110, 'hide-sm'],
-    [90, 'num'],
-    [60, 'num hide-sm'],
-    [130, 'num'],
-    [90, 'num hide-sm'],
-    [90, 'num hide-sm'],
-  ]
-  return (
-    <table>
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Type</th>
-          <th className="hide-sm">Lender</th>
-          <th className="num">Owed</th>
-          <th className="num hide-sm">Rate</th>
-          <th className="num">Payoff</th>
-          <th className="num hide-sm">Payment</th>
-          <th className="num hide-sm">Due</th>
-          <th />
-        </tr>
-      </thead>
-      <tbody>
-        {Array.from({ length: 5 }).map((_, row) => (
-          <tr key={row}>
-            {widths.map(([w, cls], col) => (
-              <td key={col} className={cls}>
-                <Bar w={w} />
-              </td>
-            ))}
-            <td />
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  )
-}
-
 function LoanTile({ loan }: { loan: Loan }) {
   return (
     <Link className="tile" to={`/loans/${loan.account_id}`}>
@@ -199,6 +158,7 @@ export default function LoansPage() {
   const columns: ColumnDef<Loan>[] = [
     {
       id: 'name',
+      meta: { label: 'Name', skeletonWidth: 180 },
       accessorKey: 'name',
       header: ({ column }) => <SortHeader column={column} label="Name" />,
       cell: ({ row }) => {
@@ -216,36 +176,42 @@ export default function LoansPage() {
     },
     {
       id: 'type',
+      meta: { label: 'Type', skeletonWidth: 90 },
       accessorKey: 'loan_type_label',
       header: ({ column }) => <SortHeader column={column} label="Type" />,
       cell: ({ row }) => row.original.loan_type_label,
     },
     {
       id: 'lender',
+      meta: { className: 'num hide-sm', label: 'Lender', skeletonWidth: 110 },
       accessorKey: 'lender',
       header: ({ column }) => <SortHeader column={column} label="Lender" />,
       cell: ({ row }) => row.original.lender || <span className="empty-cell">—</span>,
     },
     {
       id: 'owed',
+      meta: { className: 'num', label: 'Owed', skeletonWidth: 90 },
       accessorKey: 'owed_cents',
       header: ({ column }) => <SortHeader column={column} label="Owed" />,
       cell: ({ row }) => <b>{formatMoney(row.original.owed_cents)}</b>,
     },
     {
       id: 'rate',
+      meta: { className: 'num hide-sm', label: 'Rate', skeletonWidth: 60 },
       accessorKey: 'rate_bps',
       header: ({ column }) => <SortHeader column={column} label="Rate" />,
       cell: ({ row }) => rateLabel(row.original),
     },
     {
       id: 'payoff',
+      meta: { className: 'num', label: 'Payoff', skeletonWidth: 130 },
       accessorKey: 'payoff_pct',
       header: ({ column }) => <SortHeader column={column} label="Payoff" />,
       cell: ({ row }) => <Payoff loan={row.original} />,
     },
     {
       id: 'payment',
+      meta: { className: 'num hide-sm', label: 'Payment', skeletonWidth: 90 },
       accessorKey: 'min_payment_cents',
       header: ({ column }) => <SortHeader column={column} label="Payment" />,
       cell: ({ row }) =>
@@ -253,6 +219,7 @@ export default function LoansPage() {
     },
     {
       id: 'due',
+      meta: { className: 'num hide-sm', label: 'Due', skeletonWidth: 90 },
       accessorKey: 'due_day',
       header: ({ column }) => <SortHeader column={column} label="Due" />,
       cell: ({ row }) => dueLabel(row.original),
@@ -290,21 +257,6 @@ export default function LoansPage() {
       },
     },
   ]
-
-  const table = useReactTable({
-    data: loans,
-    columns,
-    state: { sorting },
-    onSortingChange: setSorting,
-    manualSorting: true,
-    getCoreRowModel: getCoreRowModel(),
-  })
-
-  const cellClass = (id: string) => {
-    if (id === 'lender' || id === 'rate' || id === 'payment' || id === 'due') return 'num hide-sm'
-    if (id === 'owed' || id === 'payoff') return 'num'
-    return ''
-  }
 
   return (
     <>
@@ -379,9 +331,7 @@ export default function LoansPage() {
             ))}
           </div>
         ) : (
-          <div className="card table-wrap">
-            <LoansSkeleton />
-          </div>
+          <DataTable columns={columns} data={[]} loading />
         )
       ) : (
         <>
@@ -427,31 +377,13 @@ export default function LoansPage() {
               ))}
             </div>
           ) : (
-            <div className="card table-wrap">
-              <table>
-                <thead>
-                  {table.getHeaderGroups().map((headerGroup) => (
-                    <tr key={headerGroup.id}>
-                      {headerGroup.headers.map((header) => (
-                        <th key={header.id} className={cellClass(header.column.id)}>
-                          {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                        </th>
-                      ))}
-                    </tr>
-                  ))}
-                </thead>
-                <tbody>
-                  {table.getRowModel().rows.map((row) => (
-                    <tr key={row.id}>
-                      {row.getVisibleCells().map((cell) => (
-                        <td key={cell.id} className={cellClass(cell.column.id)}>
-                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-                <tfoot>
+            <DataTable
+              columns={columns}
+              data={loans}
+              sorting={sorting}
+              onSortingChange={setSorting}
+              footer={
+                <>
                   <tr className="total-row">
                     <td colSpan={3}>{loans.length} shown</td>
                     <td className="num">{formatMoney(loans.reduce((s, l) => s + l.owed_cents, 0))}</td>
@@ -461,9 +393,9 @@ export default function LoansPage() {
                     <td className="num hide-sm" />
                     <td />
                   </tr>
-                </tfoot>
-              </table>
-            </div>
+                </>
+              }
+            />
           )}
         </>
       )}

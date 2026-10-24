@@ -220,6 +220,33 @@ export interface ReportRow {
   status: '' | 'over' | 'under'
 }
 
+export interface NetBreakdownRow {
+  category_id: number
+  name: string
+  depth: number
+  kind: Kind
+  is_income: boolean
+  has_children: boolean
+  budget_cents: number
+  actual_cents: number
+  effect_cents: number
+}
+
+export interface NetBreakdown {
+  month: string
+  months: string[]
+  previous: string | null
+  next: string | null
+  income_budget: number
+  income_actual: number
+  expense_budget: number
+  expense_actual: number
+  net_budget: number
+  net_actual: number
+  net_diff: number
+  rows: NetBreakdownRow[]
+}
+
 export interface Report {
   /** Rolling window months as 'YYYY-MM', oldest -> newest. */
   months: string[]

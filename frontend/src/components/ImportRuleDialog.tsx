@@ -2,11 +2,11 @@ import { Plus, X } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { api } from '../api'
 import { centsToInput } from '../money'
-import { useAccounts, useImportCategories } from '../queries'
+import { useAccounts, useImportCategories, useImportRules } from '../queries'
 import { useRun, useToast } from '../toast'
 import type { ImportRule, ImportRuleBody } from '../types'
 import { AddCategoryModal } from './AddCategoryModal'
-import { AccountSelect, CategorySelect } from './selects'
+import { AccountSelect, CategorySelect, OptionSelect } from './selects'
 import { Modal } from './ui'
 import { Tooltip } from 'react-tooltip'
 
@@ -197,6 +197,95 @@ export function AddImportRuleModal({
         <div className="row" style={{ marginTop: 8 }}>
           <button className="shrink with-icon" type="submit">
             <img src="/static/add.svg?v=2" alt="" className="icon-img" /> Add rule
+          </button>
+          <button className="secondary shrink with-icon" type="button" onClick={onClose}>
+            <X size={16} /> Cancel
+          </button>
+        </div>
+      </form>
+      <Tooltip id="rule-tip" />
+    </Modal>
+  )
+}
+
+const ruleLabel = (r: ImportRule) => {
+  const what = [r.match_text, r.amount_cents != null ? `$${centsToInput(r.amount_cents)}` : ''].filter(Boolean).join(' · ')
+  return `${what || 'Any transaction'} → ${r.category_path}${r.account_name ? ` (${r.account_name})` : ''}`
+}
+
+const mergeMatchText = (ruleText: string, rowText: string) => {
+  const row = rowText.trim()
+  if (!row) return ruleText
+  if (!ruleText.trim()) return row.slice(0, 256)
+  const has = ruleText.split('|').some((p) => p.trim().toLowerCase() === row.toLowerCase())
+  return has ? ruleText : `${ruleText} | ${row}`.slice(0, 256)
+}
+
+/** Pick an existing import rule and edit it, folding the import row's description into its match text. */
+export function UpdateImportRuleModal({
+  row,
+  onClose,
+  onUpdated,
+}: {
+  row: RuleDraft
+  onClose: () => void
+  onUpdated?: () => void
+}) {
+  const run = useRun()
+  const { fail } = useToast()
+  const rules = useImportRules().data ?? []
+  const [ruleId, setRuleId] = useState('')
+  const [draft, setDraft] = useState<RuleDraft>(row)
+  const rule = rules.find((r) => String(r.id) === ruleId)
+
+  function choose(id: string) {
+    setRuleId(id)
+    const picked = rules.find((r) => String(r.id) === id)
+    if (!picked) return
+    const base = ruleToDraft(picked)
+    setDraft({ ...base, match_text: mergeMatchText(base.match_text, row.match_text) })
+  }
+
+  async function submit(e: FormEvent) {
+    e.preventDefault()
+    if (!rule) return fail('Pick the rule to update')
+    if (!hasIdentifier(draft)) return fail('Add a description, an amount, or a date to identify the transaction')
+    if (draft.account_id == null) return fail('Pick an account')
+    if (draft.category_id == null) return fail('Pick a category')
+    const body = draftToBody({ ...draft, account_id: draft.account_id, category_id: draft.category_id }, rule.sort_order)
+    if (await run(() => api.updateImportRule(rule.id, body), 'Updated rule')) {
+      onUpdated?.()
+      onClose()
+    }
+  }
+
+  return (
+    <Modal title="Update import rule" onClose={onClose}>
+      <form onSubmit={submit}>
+        <div className="form-grid">
+          <div className="field-full">
+            <label htmlFor="rule-update-pick">Rule</label>
+            <OptionSelect
+              id="rule-update-pick"
+              label="Rule to update"
+              searchable
+              value={ruleId}
+              onChange={choose}
+              options={rules.map((r) => ({ value: String(r.id), label: ruleLabel(r) }))}
+            />
+          </div>
+          {rule && <DraftFields key={rule.id} draft={draft} onChange={setDraft} idPrefix="rule-update" />}
+        </div>
+        {rule ? (
+          <p className="small muted">
+            This row's description was added to the rule's match text. Edit anything before saving.
+          </p>
+        ) : (
+          <p className="small muted">Choose a rule to edit.</p>
+        )}
+        <div className="row" style={{ marginTop: 8 }}>
+          <button className="shrink" type="submit" disabled={!rule}>
+            Save rule
           </button>
           <button className="secondary shrink with-icon" type="button" onClick={onClose}>
             <X size={16} /> Cancel

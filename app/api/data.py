@@ -1235,6 +1235,23 @@ def get_report(db: Session = Depends(get_db), month: int | None = None, as_of: d
     }
 
 
+@router.get("/reports/net/{month}")
+def get_net_breakdown(month: str, db: Session = Depends(get_db), as_of: date | None = None):
+    """Per-category explanation of why a month's NET differs from its budgeted NET."""
+    with user_errors():
+        return reports.net_breakdown(db, budgets.parse_month(month), as_of)
+
+
+@router.get("/reports/net/{month}/transactions")
+def get_net_transactions(month: str, category_id: int, db: Session = Depends(get_db), as_of: date | None = None):
+    """Transactions behind one category's Actual for the month (same exclusions as the report)."""
+    with user_errors():
+        txns = reports.net_transactions(db, budgets.parse_month(month), category_id, as_of)
+    tree = category_service.load_tree(db)
+    peers = _peer_lookup(db, txns)
+    return [_txn_out(t, tree, peers.get(t.id)) for t in txns]
+
+
 # ------------------------------------------------------------------ cash flow
 
 

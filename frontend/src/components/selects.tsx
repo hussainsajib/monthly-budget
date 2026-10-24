@@ -413,9 +413,10 @@ interface OptionSelectProps {
   onChange: (value: string) => void
   id?: string
   label: string
+  searchable?: boolean
 }
 
-export function OptionSelect({ options, value, onChange, id, label }: OptionSelectProps) {
+export function OptionSelect({ options, value, onChange, id, label, searchable = false }: OptionSelectProps) {
   return (
     <Select
       inputId={id}
@@ -423,7 +424,7 @@ export function OptionSelect({ options, value, onChange, id, label }: OptionSele
       menuPosition="fixed"
       menuPortalTarget={document.body}
       styles={selectStyles}
-      isSearchable={false}
+      isSearchable={searchable}
       isClearable={false}
       options={options}
       value={options.find((o) => o.value === value) ?? null}

@@ -1,9 +1,10 @@
-import { flexRender, getCoreRowModel, useReactTable, type ColumnDef, type SortingState } from '@tanstack/react-table'
+import { type ColumnDef, type SortingState } from '@tanstack/react-table'
 import { Archive, ArchiveRestore, ChevronLeft, ChevronRight, Pencil, Trash2, X } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import Select, { type MultiValue, type StylesConfig } from 'react-select'
 import { api } from '../api'
 import { AccountSelect, CategorySelect, selectStyles } from '../components/selects'
+import { DataTable } from '../components/DataTable'
 import { Bar, SortHeader } from '../components/table'
 import { Modal, ViewToggle, useViewMode } from '../components/ui'
 import { centsToInput, formatMoney, todayIso } from '../money'
@@ -573,42 +574,6 @@ function RecurrenceWizard({
   )
 }
 
-function RecurringSkeleton() {
-  const columns: Array<[number, string]> = [
-    [180, ''],
-    [150, ''],
-    [110, 'hide-sm'],
-    [96, 'num'],
-    [190, ''],
-  ]
-  return (
-    <table>
-      <thead>
-        <tr>
-          <th>Description</th>
-          <th>Category</th>
-          <th className="hide-sm">Account</th>
-          <th className="num">Amount</th>
-          <th>Repeats</th>
-          <th />
-        </tr>
-      </thead>
-      <tbody>
-        {Array.from({ length: 6 }).map((_, row) => (
-          <tr key={row}>
-            {columns.map(([w, cls], col) => (
-              <td key={col} className={cls}>
-                <Bar w={w} />
-              </td>
-            ))}
-            <td />
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  )
-}
-
 function RecurringTile({
   template,
   onEdit,
@@ -741,6 +706,7 @@ export default function RecurringTab() {
   const columns: ColumnDef<Recurring>[] = [
     {
       id: 'description',
+      meta: { label: 'Description', skeletonWidth: 180 },
       accessorKey: 'description',
       header: ({ column }) => <SortHeader column={column} label="Description" />,
       cell: ({ row }) => {
@@ -755,24 +721,28 @@ export default function RecurringTab() {
     },
     {
       id: 'category',
+      meta: { label: 'Category', skeletonWidth: 150 },
       accessorKey: 'category_path',
       header: ({ column }) => <SortHeader column={column} label="Category" />,
       cell: ({ row }) => row.original.category_path.split(' \u203a ').pop(),
     },
     {
       id: 'account',
+      meta: { className: 'hide-sm', label: 'Account', skeletonWidth: 110 },
       accessorKey: 'account_name',
       header: ({ column }) => <SortHeader column={column} label="Account" />,
       cell: ({ row }) => row.original.account_name ?? <span className="empty-cell">â€”</span>,
     },
     {
       id: 'amount',
+      meta: { className: 'num', label: 'Amount', skeletonWidth: 96 },
       accessorKey: 'amount_cents',
       header: ({ column }) => <SortHeader column={column} label="Amount" />,
       cell: ({ row }) => <b>{formatMoney(row.original.amount_cents)}</b>,
     },
     {
       id: 'schedule',
+      meta: { label: 'Repeats', skeletonWidth: 190 },
       enableSorting: false,
       header: () => 'Repeats',
       cell: ({ row }) => scheduleSummary(row.original.schedule ?? fromTemplate(row.original).schedule),
@@ -810,17 +780,6 @@ export default function RecurringTab() {
       },
     },
   ]
-
-  const table = useReactTable({
-    data: templates,
-    columns,
-    state: { sorting },
-    onSortingChange: setSorting,
-    manualSorting: true,
-    getCoreRowModel: getCoreRowModel(),
-  })
-
-  const cellClass = (id: string) => (id === 'account' ? 'hide-sm' : id === 'amount' ? 'num' : '')
 
   return (
     <>
@@ -908,9 +867,7 @@ export default function RecurringTab() {
         view === 'card' ? (
           <RecurringTilesSkeleton />
         ) : (
-          <div className="card table-wrap">
-            <RecurringSkeleton />
-          </div>
+          <DataTable columns={columns} data={[]} loading />
         )
       ) : templates.length === 0 ? (
         <div className="card">
@@ -923,32 +880,7 @@ export default function RecurringTab() {
           ))}
         </div>
       ) : (
-        <div className="card table-wrap">
-          <table>
-            <thead>
-              {table.getHeaderGroups().map((headerGroup) => (
-                <tr key={headerGroup.id}>
-                  {headerGroup.headers.map((header) => (
-                    <th key={header.id} className={cellClass(header.column.id)}>
-                      {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                    </th>
-                  ))}
-                </tr>
-              ))}
-            </thead>
-            <tbody>
-              {table.getRowModel().rows.map((row) => (
-                <tr key={row.id}>
-                  {row.getVisibleCells().map((cell) => (
-                    <td key={cell.id} className={cellClass(cell.column.id)}>
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DataTable columns={columns} data={templates} sorting={sorting} onSortingChange={setSorting} />
       )}
     </>
   )

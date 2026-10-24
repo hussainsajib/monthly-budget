@@ -1,6 +1,7 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { Fragment, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../api'
 import { Loading, MonthField } from '../components/ui'
@@ -188,7 +189,15 @@ export default function ReportsPage() {
                   {r.net_months.map((c, i) => (
                     <Fragment key={i}>
                       <td className="num muted">{formatMoney(r.net_budgets[i], true)}</td>
-                      <td className={`num ${tone(c, r.net_budgets[i], false)}`}>{formatMoney(c, true)}</td>
+                      <td className={`num ${tone(c, r.net_budgets[i], false)}`}>
+                        <Link
+                          to={`/reports/net/${r.months[i]}`}
+                          className="net-link"
+                          aria-label={`Why NET differs from budget in ${monthLabel(r.months[i], withYear)}`}
+                        >
+                          {formatMoney(c, true) || formatMoney(0)}
+                        </Link>
+                      </td>
                     </Fragment>
                   ))}
                 </tr>

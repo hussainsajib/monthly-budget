@@ -9,6 +9,7 @@ import type {
   ImportPreviewRow,
   ImportRule,
   ImportRuleBody,
+  NetBreakdown,
   LedgerCheck,
   LoanCreateBody,
   LoanDetail,
@@ -164,6 +165,9 @@ export const api = {
   deletePlanItem: (planId: number, itemId: number) => del(`/plans/${planId}/items/${itemId}`),
 
   report: (month: number | null) => get<Report>(`/reports${qs({ month })}`),
+  netBreakdown: (month: string) => get<NetBreakdown>(`/reports/net/${month}`),
+  netTransactions: (month: string, categoryId: number) =>
+    get<Txn[]>(`/reports/net/${month}/transactions${qs({ category_id: categoryId })}`),
   cashflow: (accountId: number | null) => get<Cashflow>(`/cashflow${qs({ account_id: accountId })}`),
   thresholds: () => get<{ low_balance_cents: number; warn_balance_cents: number }>('/settings/thresholds'),
   setThresholds: (low: string, warn: string) =>

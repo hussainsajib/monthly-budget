@@ -1,25 +1,20 @@
 import { useQuery } from '@tanstack/react-query'
-import {
-  flexRender,
-  getCoreRowModel,
-  useReactTable,
-  type ColumnDef,
-  type OnChangeFn,
-  type SortingState,
-} from '@tanstack/react-table'
-import { ChevronLeft, ChevronRight, X } from 'lucide-react'
+import { type ColumnDef, type OnChangeFn, type SortingState } from '@tanstack/react-table'
+import { X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import ReactPaginateImport from 'react-paginate'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { Tooltip } from 'react-tooltip'
 import { api } from '../api'
 import { DEFAULT_LEVELS, isIncomeKind } from '../categoryConfig'
 import { AccountSelect, CategoryFilter, OptionSelect } from '../components/selects'
-import { Bar, SortHeader } from '../components/table'
+import { DataTable } from '../components/DataTable'
+import { SortHeader } from '../components/table'
 import TransferForm, { type TransferFormValues } from '../components/TransferForm'
 import TxnForm, { type TxnFormValues } from '../components/TxnForm'
 import { ColumnFilter } from '../components/ColumnFilter'
 import { Modal } from '../components/ui'
+import { DateRangeFilter } from '../components/DateRangeFilter'
+import { RANGE_OPTIONS, parseRangeKey, resolveRange, type RangeKey } from '../dateRange'
 import { formatMoney, todayIso } from '../money'
 import { useAccounts, useCategories, useCategoryConfig, useImportCategories } from '../queries'
 import { useRun } from '../toast'
@@ -27,41 +22,6 @@ import type { Txn } from '../types'
 
 const FILTER_KEYS = ['q', 'start', 'end', 'category_id', 'account_id', 'range'] as const
 type FilterKey = (typeof FILTER_KEYS)[number]
-
-type RangeKey = 'all' | 'month' | 'days30' | 'ytd' | 'custom'
-const RANGE_OPTIONS: Array<{ key: RangeKey; short: string; full: string }> = [
-  { key: 'all', short: 'All', full: 'All time' },
-  { key: 'month', short: 'Month', full: 'This month' },
-  { key: 'days30', short: '30d', full: 'Last 30 days' },
-  { key: 'ytd', short: 'YTD', full: 'Year to date' },
-  { key: 'custom', short: 'Custom', full: 'Custom' },
-]
-
-const isoOf = (d: Date) => {
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
-}
-
-/** Start/end corners for the preset ranges (custom/all handled separately). */
-function rangeDates(key: Exclude<RangeKey, 'all' | 'custom'>): { start: string; end: string } {
-  const now = new Date()
-  if (key === 'month') {
-    return {
-      start: isoOf(new Date(now.getFullYear(), now.getMonth(), 1)),
-      end: isoOf(new Date(now.getFullYear(), now.getMonth() + 1, 0)),
-    }
-  }
-  if (key === 'days30') {
-    const s = new Date(now)
-    s.setDate(s.getDate() - 29)
-    return { start: isoOf(s), end: isoOf(now) }
-  }
-  return { start: isoOf(new Date(now.getFullYear(), 0, 1)), end: isoOf(now) }
-}
-
-// react-paginate is CJS; some bundlers hand back the module namespace ({ default: Component }) as the default import.
-const ReactPaginate =
-  (ReactPaginateImport as unknown as { default?: typeof ReactPaginateImport }).default ?? ReactPaginateImport
 
 const blankForm = (date: string): TxnFormValues => ({
   date,
@@ -80,53 +40,6 @@ const blankTransfer = (date: string): TransferFormValues => ({
   to_account_id: null,
   notes: '',
 })
-
-// Fixed column widths keep the table from reflowing as different rows are shown.
-const COL_WIDTH: Record<string, string> = {
-  date: '9%',
-  select: '36px',
-  category_0: '12%',
-  category_1: '12%',
-  category_2: '12%',
-  account: '12%',
-  amount: '10%',
-}
-
-function TableSkeleton({ levels }: { levels: string[] }) {
-  const heads: Array<{ label: string; width?: string; cls?: string }> = [
-    { label: '', width: COL_WIDTH.select },
-    { label: 'Date', width: COL_WIDTH.date },
-    { label: 'Description' },
-    ...levels.map((l, i) => ({ label: l, width: COL_WIDTH[`category_${i}`] })),
-    { label: 'Account', width: COL_WIDTH.account, cls: 'hide-sm' },
-    { label: 'Amount', width: COL_WIDTH.amount, cls: 'num' },
-  ]
-  const barWidths = heads.map((_, i) => (i === 0 ? 16 : i === 1 ? 70 : i === 2 ? 240 : 90))
-  return (
-    <table className="txn-table">
-      <thead>
-        <tr>
-          {heads.map((c, i) => (
-            <th key={i} className={c.cls ?? ''} style={c.width ? { width: c.width } : undefined}>
-              {c.label}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {Array.from({ length: 8 }).map((_, row) => (
-          <tr key={row}>
-            {heads.map((c, col) => (
-              <td key={col} className={c.cls ?? ''}>
-                <Bar w={barWidths[col]} />
-              </td>
-            ))}
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  )
-}
 
 export default function TransactionsPage() {
   const [params, setParams] = useSearchParams()
@@ -153,8 +66,8 @@ export default function TransactionsPage() {
   const dir = sorting[0] && sorting[0].desc === false ? 'asc' : 'desc'
 
   const filters = Object.fromEntries([...FILTER_KEYS, 'page'].map((k) => [k, params.get(k) ?? '']))
-  const rangeKey: RangeKey = filters.range === 'custom' || filters.range === 'month' || filters.range === 'days30' || filters.range === 'ytd' ? filters.range : 'all'
-  const rangeDatesValue = rangeKey === 'custom' ? { start: filters.start, end: filters.end } : rangeKey === 'all' ? { start: '', end: '' } : rangeDates(rangeKey)
+  const rangeKey = parseRangeKey(filters.range)
+  const rangeDatesValue = resolveRange(rangeKey, filters.start, filters.end)
   const serverQuery = {
     q: filters.q,
     start: rangeDatesValue.start,
@@ -364,6 +277,7 @@ export default function TransactionsPage() {
   const activeCategory = filters.category_id ? filterCategoryById.get(Number(filters.category_id)) : undefined
   const categoryColumns: ColumnDef<Txn>[] = levels.map((label, i) => ({
     id: `category_${i}`,
+    meta: { width: '12%', className: 'trunc', label },
     enableSorting: false,
     header: () => (
       <span className="th-inner">
@@ -386,6 +300,7 @@ export default function TransactionsPage() {
   const columns: ColumnDef<Txn>[] = [
     {
       id: 'select',
+      meta: { width: '36px', className: 'select-col', skeletonWidth: 16 },
       enableSorting: false,
       header: () => (
         <input
@@ -410,36 +325,19 @@ export default function TransactionsPage() {
     },
     {
       id: 'date',
+      meta: { width: '9%', label: 'Date', skeletonWidth: 70 },
       accessorKey: 'date',
       header: ({ column }) => (
         <span className="th-inner">
           <SortHeader column={column} label="Date" />
           <ColumnFilter label="Date" active={rangeKey !== 'all'}>
-            <div className="segmented" role="group" aria-label="Date range">
-              {RANGE_OPTIONS.filter((o) => o.key !== 'custom').map((o) => (
-                <button key={o.key} type="button" className={rangeKey === o.key ? 'on' : ''} onClick={() => applyRange(o.key)}>
-                  {o.short}
-                </button>
-              ))}
-            </div>
-            <div>
-              <label htmlFor="hdr-start">From</label>
-              <input
-                id="hdr-start"
-                type="date"
-                value={rangeDatesValue.start}
-                onChange={(e) => applyRangeCustom({ start: e.target.value, end: rangeDatesValue.end })}
-              />
-            </div>
-            <div>
-              <label htmlFor="hdr-end">To</label>
-              <input
-                id="hdr-end"
-                type="date"
-                value={rangeDatesValue.end}
-                onChange={(e) => applyRangeCustom({ start: rangeDatesValue.start, end: e.target.value })}
-              />
-            </div>
+            <DateRangeFilter
+              rangeKey={rangeKey}
+              start={rangeDatesValue.start}
+              end={rangeDatesValue.end}
+              onRange={applyRange}
+              onCustom={applyRangeCustom}
+            />
           </ColumnFilter>
         </span>
       ),
@@ -447,6 +345,7 @@ export default function TransactionsPage() {
     },
     {
       id: 'description',
+      meta: { label: 'Description', skeletonWidth: 240 },
       accessorKey: 'description',
       header: ({ column }) => (
         <span className="th-inner">
@@ -475,6 +374,7 @@ export default function TransactionsPage() {
     ...categoryColumns,
     {
       id: 'account',
+      meta: { width: '12%', className: 'hide-sm trunc', label: 'Account' },
       accessorKey: 'account_name',
       header: ({ column }) => (
         <span className="th-inner">
@@ -501,6 +401,7 @@ export default function TransactionsPage() {
     },
     {
       id: 'amount',
+      meta: { width: '10%', className: 'num', label: 'Amount' },
       accessorKey: 'amount_cents',
       header: ({ column }) => <SortHeader column={column} label="Amount" />,
       cell: ({ row }) => (
@@ -510,18 +411,6 @@ export default function TransactionsPage() {
       ),
     },
   ]
-
-  const table = useReactTable({
-    data: items,
-    columns,
-    state: { sorting },
-    onSortingChange,
-    manualSorting: true,
-    getCoreRowModel: getCoreRowModel(),
-  })
-
-  const cellClass = (id: string) =>
-    id === 'amount' ? 'num' : id === 'account' ? 'hide-sm trunc' : id.startsWith('category_') ? 'trunc' : ''
 
   return (
     <>
@@ -755,74 +644,18 @@ export default function TransactionsPage() {
           </button>
         </div>
       )}
-      <div className="card table-wrap">
-        {list.isPending ? (
-          <TableSkeleton levels={levels} />
-        ) : (
-          <table className="txn-table">
-            <thead>
-              {table.getHeaderGroups().map((headerGroup) => (
-                <tr key={headerGroup.id}>
-                  {headerGroup.headers.map((header) => (
-                    <th
-                      key={header.id}
-                      className={cellClass(header.column.id)}
-                      style={COL_WIDTH[header.column.id] ? { width: COL_WIDTH[header.column.id] } : undefined}
-                    >
-                      {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                    </th>
-                  ))}
-                </tr>
-              ))}
-            </thead>
-            <tbody>
-              {table.getRowModel().rows.map((row) => (
-                <tr
-                  key={row.id}
-                  className={['clickable', row.original.planned ? 'planned' : ''].join(' ')}
-                  onClick={() => navigate(`/transactions/${row.original.id}`, { state: { from } })}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') navigate(`/transactions/${row.original.id}`, { state: { from } })
-                  }}
-                  tabIndex={0}
-                  role="link"
-                  aria-label={`Edit ${row.original.description}`}
-                >
-                  {row.getVisibleCells().map((cell) => (
-                    <td key={cell.id} className={cellClass(cell.column.id)}>
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-              {list.data && items.length === 0 && (
-                <tr>
-                  <td colSpan={columns.length} className="muted">
-                    No transactions match.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      {list.data && list.data.pages > 1 && (
-        <ReactPaginate
-          pageCount={list.data.pages}
-          forcePage={list.data.page - 1}
-          onPageChange={({ selected: page }) => goToPage(page + 1)}
-          previousLabel={<ChevronLeft size={16} />}
-          nextLabel={<ChevronRight size={16} />}
-          breakLabel="…"
-          containerClassName="pagination"
-          activeClassName="active"
-          disabledClassName="disabled"
-          breakClassName="break"
-          marginPagesDisplayed={1}
-          pageRangeDisplayed={3}
-        />
-      )}
+      <DataTable
+        columns={columns}
+        data={items}
+        sorting={sorting}
+        onSortingChange={onSortingChange}
+        loading={list.isPending}
+        emptyMessage="No transactions match."
+        onRowClick={(t) => navigate(`/transactions/${t.id}`, { state: { from } })}
+        rowAriaLabel={(t) => `Edit ${t.description}`}
+        rowClassName={(t) => (t.planned ? 'planned' : '')}
+        pagination={list.data ? { pageCount: list.data.pages, page: list.data.page, onPageChange: goToPage } : undefined}
+      />
 
       {adding && (
         <Modal title="Add transaction" onClose={() => setAdding(false)}>
