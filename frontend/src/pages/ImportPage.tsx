@@ -52,10 +52,15 @@ export default function ImportPage() {
       amount_cents: r.amount_cents,
       direction: r.direction,
       category_id: r.category_id,
+      loan_account_id: r.loan_account_id ?? null,
     }))
     const res = await run(() => api.applyImportRules(acc, payload))
     if (!res) return null
-    return currentRows.map((r, i) => ({ ...r, category_id: res.category_ids[i] ?? r.category_id }))
+    return currentRows.map((r, i) => ({
+      ...r,
+      category_id: res.category_ids[i] ?? r.category_id,
+      loan_account_id: res.loan_account_ids?.[i] ?? null,
+    }))
   }
 
   // Restore a saved import after a refresh, then re-run rules so newly created rules fill in blanks.
@@ -104,6 +109,7 @@ export default function ImportPage() {
     day_from: Number(r.date.slice(8, 10)),
     day_to: null,
     category_id: r.category_id,
+    loan_account_id: r.loan_account_id ?? null,
     is_active: true,
   })
 
@@ -165,6 +171,7 @@ export default function ImportPage() {
             key: r.key,
             recurring_template_id: r.recurring_template_id,
             balance_cents: r.balance_cents,
+            loan_account_id: r.loan_account_id ?? null,
           })),
         ),
       (r) => `Imported ${r.imported} transaction(s)`,
@@ -238,7 +245,7 @@ export default function ImportPage() {
       if (bulkCategory === null) return fail('Pick a category to apply')
       if (bulkTargets.length === 0) return fail('No shown rows to update')
       const targets = new Set(bulkTargets.map(({ i }) => i))
-      setRows(rows.map((r, i) => (targets.has(i) ? { ...r, category_id: bulkCategory, include: true } : r)))
+      setRows(rows.map((r, i) => (targets.has(i) ? { ...r, category_id: bulkCategory, loan_account_id: null, include: true } : r)))
     }
 
     return (
@@ -457,7 +464,7 @@ export default function ImportPage() {
                     <CategorySelect
                       categories={categories.data ?? []}
                       value={r.category_id}
-                      onChange={(id) => patch(i, { category_id: id })}
+                      onChange={(id) => patch(i, { category_id: id, loan_account_id: null })}
                       showLabels={false}
                     />
                   </td>
@@ -465,7 +472,12 @@ export default function ImportPage() {
                     {r.direction === 'in' && '+'}
                     {formatMoney(r.amount_cents)}
                   </td>
-                  <td>{r.duplicate && <span className="chip">possible duplicate</span>}</td>
+                  <td>
+                    {r.duplicate && <span className="chip">possible duplicate</span>}
+                    {r.loan_account_id != null && (
+                      <span className="chip">pays {accounts.data?.find((a) => a.id === r.loan_account_id)?.name ?? 'loan'}</span>
+                    )}
+                  </td>
                   <td className="num">
                     <ActionMenu
                       label={`Import rule from ${r.description}`}

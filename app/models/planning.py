@@ -49,7 +49,9 @@ class ImportRule(Base):
     equals ``amount_cents`` (None = any) and its day of the month falls inside the optional
     [day_from, day_to] window (1..31). A rule must carry at least one of description/amount/day so
     it actually identifies something. Rules are consulted only when learned history has no
-    suggestion, in ``sort_order`` then id order; the first active rule that matches wins.
+    suggestion, in ``sort_order`` then id order; the first active rule that matches wins. A rule with
+    ``loan_account_id`` instead turns a matching money-out row into a payment on that loan (its category
+    is the Transfer category) and takes precedence over learned history.
     ``sort_order`` also drives the Settings UI ordering.
     """
 
@@ -62,11 +64,13 @@ class ImportRule(Base):
     day_from: Mapped[int | None] = mapped_column(Integer)  # day of month window (1..31), inclusive
     day_to: Mapped[int | None] = mapped_column(Integer)
     category_id: Mapped[int] = mapped_column(ForeignKey("categories.id", ondelete="CASCADE"))
+    loan_account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"))
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
-    account: Mapped[Account] = relationship(lazy="joined")
+    account: Mapped[Account] = relationship(lazy="joined", foreign_keys=[account_id])
     category: Mapped[Category] = relationship(lazy="joined")
+    loan_account: Mapped[Account | None] = relationship(lazy="joined", foreign_keys=[loan_account_id])
 
 
 class Plan(Base):

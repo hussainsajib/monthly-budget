@@ -168,7 +168,7 @@ function RollingSummary({ plan }: { plan: Plan }) {
   const low = (d.lowest_balance_cents ?? 0) < 0
   const variable = d.variable_spending_cents ?? 0
   return (
-    <div className="card stat">
+    <div className="card stat spread">
       <div>
         <span className="muted small">Safe to spend</span>
         <b className={d.safe_to_spend_cents != null && d.safe_to_spend_cents < 0 ? 'over' : ''}>
@@ -207,7 +207,7 @@ function GoalSummary({ plan }: { plan: Plan }) {
   const pct = Math.max(0, Math.min(100, d.progress_pct ?? 0))
   return (
     <div className="card">
-      <div className="stat">
+      <div className="stat spread">
         <div>
           <span className="muted small">Funded</span>
           <b>{formatMoney(d.funded_cents ?? 0)}</b>
@@ -246,7 +246,7 @@ function SavingsSummary({ plan }: { plan: Plan }) {
   const hasActual = months.some((m) => m.kind === 'actual')
   return (
     <>
-      <div className="card stat">
+      <div className="card stat spread">
         <div>
           <span className="muted small">Free to save</span>
           <b className={net < 0 ? 'over' : ''}>{formatMoney(net)}</b>
@@ -353,7 +353,7 @@ function FundingActivity({ plan }: { plan: Plan }) {
           ? `Money reaching ${f.account_name} funds the goal; money leaving it is spent.`
           : 'Every transaction in the funding category counts toward the goal. Set a target account to split funding from spending.'}
       </p>
-      <div className="card stat">
+      <div className="card stat spread">
         <div>
           <span className="muted small">Set aside</span>
           <b className={f.net_cents < 0 ? 'over' : ''}>{formatMoney(f.net_cents)}</b>
@@ -411,7 +411,7 @@ function DebtSummary({ plan }: { plan: Plan }) {
   const schedule = (d.schedule ?? []).slice(0, 24)
   return (
     <>
-      <div className="card stat">
+      <div className="card stat spread">
         <div>
           <span className="muted small">Monthly payment</span>
           <b>{formatMoney(d.monthly_payment_cents ?? 0)}</b>
@@ -491,7 +491,7 @@ function EventSummary({ plan }: { plan: Plan }) {
   const over = (d.remaining_cents ?? 0) < 0
   return (
     <div className="card">
-      <div className="stat">
+      <div className="stat spread">
         <div>
           <span className="muted small">Budget</span>
           <b>{formatMoney(budget)}</b>
@@ -560,7 +560,7 @@ function AffordabilitySummary({ plan }: { plan: Plan }) {
           ? `Yes — you can afford ${formatMoney(d.purchase_cents ?? 0)} on ${d.purchase_date}.`
           : `No — short by ${formatMoney(d.shortfall_cents ?? 0)} on ${d.purchase_date}.`}
       </div>
-      <div className="card stat">
+      <div className="card stat spread">
         <div>
           <span className="muted small">Purchase</span>
           <b>{formatMoney(d.purchase_cents ?? 0)}</b>

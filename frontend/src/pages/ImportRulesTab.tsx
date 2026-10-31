@@ -5,9 +5,10 @@ import {
   AddImportRuleModal,
   DraftFields,
   EMPTY_RULE,
+  draftProblem,
   draftToBody,
-  hasIdentifier,
   ruleToDraft,
+  type ReadyRuleDraft,
   type RuleDraft,
 } from '../components/ImportRuleDialog'
 import { Bar } from '../components/table'
@@ -90,11 +91,9 @@ export default function ImportRulesTab() {
     setModal({ mode: 'edit', id: r.id })
   }
 
-  function valid(d: RuleDraft): d is RuleDraft & { account_id: number; category_id: number } {
-    if (!hasIdentifier(d)) return fail('Add a description, an amount, or a date to identify the transaction') ?? false
-    if (d.account_id == null) return fail('Pick an account') ?? false
-    if (d.category_id == null) return fail('Pick a category') ?? false
-    return true
+  function valid(d: RuleDraft): d is ReadyRuleDraft {
+    const problem = draftProblem(d)
+    return problem ? (fail(problem) ?? false) : true
   }
 
   async function save(e: FormEvent) {
@@ -228,7 +227,16 @@ export default function ImportRulesTab() {
                   </td>
                   <td>{r.account_name ?? <span className="empty-cell">—</span>}</td>
                   <td>{range(r)}</td>
-                  <td>{r.category_path || <span className="empty-cell">—</span>}</td>
+                  <td>
+                    {r.loan_account_name ? (
+                      <span className="row-label">
+                        <span className="chip">loan payment</span>
+                        <span className="nm">{r.loan_account_name}</span>
+                      </span>
+                    ) : (
+                      r.category_path || <span className="empty-cell">—</span>
+                    )}
+                  </td>
                   <td className="hide-sm icon-group">
                     <button
                       type="button"

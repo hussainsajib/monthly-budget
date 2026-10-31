@@ -13,9 +13,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.money import to_cents
-from app.models import Category, Transaction
+from app.models import Account, Category, Transaction
 from app.models.ledger import stored_amount
-from app.services import import_rules, suggestions
+from app.services import import_rules, loans, suggestions
 from app.services.category_config import income_keys
 
 DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%Y/%m/%d", "%d-%b-%Y", "%b %d, %Y", "%m/%d/%y")
@@ -42,6 +42,7 @@ class ParsedRow:
     key: str = ""
     recurring_template_id: int | None = None
     balance_cents: int | None = None
+    loan_account_id: int | None = None
 
 
 def parse_date(text: str) -> date:
@@ -157,6 +158,13 @@ def prepare_preview(db: Session, rows: list[ParsedRow], account_id: int | None) 
     )
     rules = import_rules.active_rules(db)
     for row in rows:
+        loan_rule = import_rules.match_loan(
+            rules, row.description, account_id, row.date, row.amount_cents, row.direction
+        )
+        if loan_rule is not None:
+            row.category_id, row.loan_account_id = loan_rule.category_id, loan_rule.loan_account_id
+            row.duplicate = row.key in known_hashes or (row.date, row.amount_cents, account_id) in existing
+            continue
         hit = suggestions.lookup(index, row.description)
         # Explicit rules only fill in where history (with its exact/fuzzy matching) has no answer.
         row.category_id = (
@@ -173,10 +181,18 @@ def apply_rules(db: Session, rows: list[ParsedRow], account_id: int | None) -> N
 
     Rows that already carry a category (history, a rule that ran earlier, or the user's own pick)
     are left untouched, so applying a freshly added rule never overwrites a deliberate choice.
+    The exception is a loan-payment rule: it names the row explicitly, so it claims a matching
+    money-out row whatever category history gave it.
     """
     index = suggestions.build_index(db)
     rules = import_rules.active_rules(db)
     for row in rows:
+        loan_rule = import_rules.match_loan(
+            rules, row.description, account_id, row.date, row.amount_cents, row.direction
+        )
+        if loan_rule is not None:
+            row.category_id, row.loan_account_id = loan_rule.category_id, loan_rule.loan_account_id
+            continue
         if row.category_id is not None:
             continue
         hit = suggestions.lookup(index, row.description)
@@ -202,17 +218,26 @@ def backfill_balances(db: Session, items: list[tuple[str, int]]) -> int:
 
 
 def commit_rows(db: Session, rows: list[ParsedRow], account_id: int | None) -> int:
+    for loan_id in {r.loan_account_id for r in rows if r.loan_account_id is not None}:
+        loan = db.get(Account, loan_id)
+        if loan is None or not loans.is_loan(loan):
+            raise loans.LoanError("A loan-payment row points at an account that is not a loan")
+        if loan_id == account_id:
+            raise loans.LoanError("A payment cannot go to the account it comes from")
     kinds = {c.id: c.kind for c in db.scalars(select(Category))}
     income = income_keys(db)
     existing = set(
         db.scalars(select(Transaction.import_hash).where(Transaction.import_hash.in_([r.key for r in rows])))
     ) if rows else set()
     created = 0
+    pay_loan: dict[str, int] = {}
     for row in rows:
         if row.key in existing:
             continue
         existing.add(row.key)
         created += 1
+        if row.loan_account_id is not None and row.direction == "out":
+            pay_loan[row.key] = row.loan_account_id
         kind = kinds[row.category_id]
         # One rule writes the row: money in on an expense (a refund) or money out on income is stored
         # negative; a transfer leg is stored as its signed effect. See ``ledger.stored_amount``.
@@ -232,4 +257,7 @@ def commit_rows(db: Session, rows: list[ParsedRow], account_id: int | None) -> i
             )
         )
     db.commit()
+    if pay_loan:
+        for txn in db.scalars(select(Transaction).where(Transaction.import_hash.in_(list(pay_loan)))).unique():
+            loans.convert_to_payment(db, db.get(Account, pay_loan[txn.import_hash]), txn)
     return created

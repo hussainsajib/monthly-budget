@@ -177,6 +177,7 @@ export interface ImportPreviewRow {
   key: string
   recurring_template_id: number | null
   balance_cents: number | null
+  loan_account_id: number | null
 }
 
 export interface ImportRule {
@@ -189,6 +190,8 @@ export interface ImportRule {
   day_to: number | null
   category_id: number
   category_path: string
+  loan_account_id: number | null
+  loan_account_name: string | null
   sort_order: number
   is_active: boolean
 }
@@ -199,7 +202,8 @@ export interface ImportRuleBody {
   account_id: number
   day_from: number | null
   day_to: number | null
-  category_id: number
+  category_id: number | null
+  loan_account_id: number | null
   sort_order: number
   is_active: boolean
 }
@@ -253,6 +257,8 @@ export interface Report {
   /** 1-based position in ``months`` driving the category chart. */
   month: number
   net_months: number[]
+  income_months: number[]
+  expense_months: number[]
   expense_budgets: number[]
   income_budgets: number[]
   net_budgets: number[]
@@ -321,7 +327,7 @@ export interface BudgetMonth {
   lines: BudgetLine[]
 }
 
-export type PlanConfigKind = 'money' | 'int' | 'date' | 'text' | 'select' | 'category' | 'categories' | 'paycheck'
+export type PlanConfigKind = 'money' | 'int' | 'date' | 'text' | 'select' | 'category' | 'categories' | 'paycheck' | 'loan'
 
 export interface PlanConfigField {
   key: string

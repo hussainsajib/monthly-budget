@@ -1,5 +1,7 @@
 from datetime import date
 
+import pytest
+
 from app.models import Account, ImportRule, Transaction
 from app.services import cashflow, import_rules, importing, reports, suggestions
 from app.services import categories as category_service
@@ -155,3 +157,78 @@ def test_refund_on_expense_category_is_negative(db, ids):
     row = importing.ParsedRow(date(2026, 5, 3), "Refund", 1000, "in", category_id=cats["Grocery"], key="k1")
     importing.commit_rows(db, [row], None)
     assert db.query(Transaction).filter_by(import_hash="k1").one().amount_cents == -1000
+
+
+def _loan_rule_setup(db, accs):
+    loan = Account(name="Test Loan", kind="debt", opening_balance_cents=-100000, opening_date=date(2026, 1, 1))
+    db.add(loan)
+    db.commit()
+    rule = import_rules.create_rule(
+        db, "E-TFR ***T4m", accs["Chequing"], None, amount_cents=80000, loan_account_id=loan.id
+    )
+    return loan, rule
+
+
+def _loan_rule_cleanup(db, loan, rule):
+    db.query(Transaction).delete()
+    db.delete(rule)
+    db.delete(loan)
+    db.commit()
+
+
+def test_loan_rule_forces_transfer_category_and_claims_money_out_rows(db, ids):
+    _, accs = ids
+    loan, rule = _loan_rule_setup(db, accs)
+    try:
+        assert rule.category.kind == "transfer"
+        rows = [
+            importing.ParsedRow(date(2026, 3, 1), "SEND E-TFR ***T4m", 80000, "out"),
+            importing.ParsedRow(date(2026, 3, 1), "SEND E-TFR ***T4m", 80000, "in"),
+            importing.ParsedRow(date(2026, 3, 1), "SEND E-TFR ***T4m", 5000, "out"),
+        ]
+        importing.prepare_preview(db, rows, accs["Chequing"])
+        assert [r.loan_account_id for r in rows] == [loan.id, None, None]
+    finally:
+        _loan_rule_cleanup(db, loan, rule)
+
+
+def test_loan_rule_rejects_a_non_loan_target(db, ids):
+    _, accs = ids
+    other = Account(name="Test Savings", kind="bank")
+    db.add(other)
+    db.commit()
+    try:
+        with pytest.raises(import_rules.RuleError):
+            import_rules.create_rule(db, "X", accs["Chequing"], None, loan_account_id=other.id)
+    finally:
+        db.delete(other)
+        db.commit()
+
+
+def test_commit_turns_a_loan_rule_row_into_one_payment_not_two(db, ids):
+    _, accs = ids
+    loan, rule = _loan_rule_setup(db, accs)
+    try:
+        rows = [importing.ParsedRow(date(2026, 3, 1), "SEND E-TFR ***T4m", 80000, "out", balance_cents=5)]
+        importing.prepare_preview(db, rows, accs["Chequing"])
+        assert importing.commit_rows(db, rows, accs["Chequing"]) == 1
+        legs = list(db.query(Transaction).order_by(Transaction.id))
+        assert [(t.account_id, t.amount_cents, t.link_kind) for t in legs] == [
+            (accs["Chequing"], -80000, "transfer"),
+            (loan.id, 80000, "transfer"),
+        ]
+        assert legs[0].import_hash is not None and legs[0].link_id == legs[1].link_id
+        assert legs[0].balance_cents == 5
+    finally:
+        _loan_rule_cleanup(db, loan, rule)
+
+
+def test_apply_rules_lets_a_loan_rule_override_a_history_category(db, ids):
+    cats, accs = ids
+    loan, rule = _loan_rule_setup(db, accs)
+    try:
+        rows = [importing.ParsedRow(date(2026, 3, 1), "SEND E-TFR ***T4m", 80000, "out", category_id=cats["Grocery"])]
+        importing.apply_rules(db, rows, accs["Chequing"])
+        assert rows[0].loan_account_id == loan.id and rows[0].category_id == rule.category_id
+    finally:
+        _loan_rule_cleanup(db, loan, rule)

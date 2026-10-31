@@ -616,3 +616,45 @@ def test_affordability_checks_projected_balance(client, ids):
 def test_all_types_report_implemented(client):
     types = {t["key"]: t for t in client.get("/api/plan-types").json()}
     assert all(t["implemented"] for t in types.values())
+
+def test_goal_progress_from_payments_to_a_loan(client, ids, db):
+    from app.models import Account, Transaction
+    from app.services import transfers
+
+    cats, accs = ids
+    loan = Account(name="Plan Loan", kind="debt", opening_balance_cents=-100000, opening_date=date(2026, 1, 1))
+    db.add(loan)
+    db.commit()
+    plan_id = None
+    try:
+        plan_id = client.post(
+            "/api/plans",
+            json={
+                "name": "Pay off loan",
+                "type": "savings",
+                "account_id": None,
+                "start_date": "2026-01-01",
+                "config": {"target_cents": "1000", "category_id": cats["Grocery"], "loan_account_id": loan.id},
+            },
+        ).json()["id"]
+        transfers.create_transfer(
+            db,
+            on_date=date.today(),
+            description="Payment",
+            amount_cents=25000,
+            from_account_id=accs["Chequing"],
+            to_account_id=loan.id,
+            notes=None,
+        )
+        derived = client.get(f"/api/plans/{plan_id}").json()["derived"]
+        assert derived["funded_cents"] == 25000
+        assert derived["progress_pct"] == 25.0
+        assert derived["funding"]["account_name"] == "Plan Loan"
+        assert derived["funding"]["category_path"] == "Payments to Plan Loan"
+        assert [t["signed_cents"] for t in derived["funding"]["transactions"]] == [25000]
+    finally:
+        if plan_id is not None:
+            client.delete(f"/api/plans/{plan_id}")
+        db.query(Transaction).delete()
+        db.delete(loan)
+        db.commit()

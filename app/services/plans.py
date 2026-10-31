@@ -69,7 +69,7 @@ def normalize_config(plan_type: plan_types.PlanType, raw: dict | None) -> dict:
                     out[spec.key].append(int(item))
                 except (TypeError, ValueError):
                     continue
-        elif spec.kind in ("category", "paycheck"):
+        elif spec.kind in ("category", "paycheck", "loan"):
             out[spec.key] = int(value) if value not in (None, "") else None
         else:
             out[spec.key] = str(value).strip() if value not in (None, "") else ""
@@ -418,22 +418,32 @@ def derive_rolling(db: Session, plan: Plan, tree) -> dict:
     }
 
 
-def _funding(db: Session, plan: Plan, tree, category_id: int, start: date) -> tuple[int, dict]:
-    """Net funding progress from a category's transactions, with a per-transaction activity list.
+def _funding(
+    db: Session, plan: Plan, tree, category_id: int | None, start: date, loan_account_id: int | None = None
+) -> tuple[int, dict]:
+    """Net funding progress from a category's (or a loan's) transactions, with a per-transaction activity list.
+
+    With ``loan_account_id`` the source is that loan's own ledger instead of a category: a payment
+    is the transfer leg that lands on the loan, so it counts as a contribution however the paying
+    row was categorised.
 
     Each transaction is read as a signed effect on its own account (``cash_delta_cents``). Money
     moving *toward* the plan's target account is a contribution; money moving *away* is spending, so
     a funding category that is also spent from nets down rather than inflating progress. Without a
     target account there is no reference point, so every transaction counts as a contribution.
     """
-    cat = db.get(Category, category_id)
+    loan = db.get(Account, loan_account_id) if loan_account_id else None
+    cat = db.get(Category, category_id) if category_id else None
     is_income = bool(cat and cat.kind == INCOME)
-    target = plan.account_id
+    if loan is not None:
+        target = loan.id
+        where = Transaction.account_id == loan.id
+    else:
+        target = plan.account_id
+        where = Transaction.category_id == category_id
     txns = list(
         db.scalars(
-            select(Transaction)
-            .where(Transaction.category_id == category_id, Transaction.date >= start)
-            .order_by(Transaction.date, Transaction.id)
+            select(Transaction).where(where, Transaction.date >= start).order_by(Transaction.date, Transaction.id)
         ).unique()
     )
     rows: list[dict] = []
@@ -463,10 +473,10 @@ def _funding(db: Session, plan: Plan, tree, category_id: int, start: date) -> tu
             }
         )
     block = {
-        "category_id": category_id,
-        "category_path": tree.path(category_id),
+        "category_id": category_id or 0,
+        "category_path": f"Payments to {loan.name}" if loan is not None else tree.path(category_id),
         "account_id": target,
-        "account_name": plan.account.name if plan.account else None,
+        "account_name": loan.name if loan is not None else (plan.account.name if plan.account else None),
         "in_cents": in_cents,
         "out_cents": out_cents,
         "net_cents": in_cents - out_cents,
@@ -485,8 +495,9 @@ def derive_goal(db: Session, plan: Plan, tree) -> dict:
     funded = 0
     funding_block = None
     funding_category = config.get("category_id")
-    if funding_category:
-        net, funding_block = _funding(db, plan, tree, funding_category, start)
+    funding_loan = config.get("loan_account_id")
+    if funding_category or funding_loan:
+        net, funding_block = _funding(db, plan, tree, funding_category, start, funding_loan)
         funded += net
     funded += sum(e["amount_cents"] for e in manual_events(plan, tree) if e["item_kind"] == "contribution")
 
@@ -598,8 +609,9 @@ def derive_savings(db: Session, plan: Plan, tree) -> dict:
     funded = 0
     funding_block = None
     funding_category = config.get("category_id")
-    if funding_category:
-        net, funding_block = _funding(db, plan, tree, funding_category, start_for_funding)
+    funding_loan = config.get("loan_account_id")
+    if funding_category or funding_loan:
+        net, funding_block = _funding(db, plan, tree, funding_category, start_for_funding, funding_loan)
         funded += net
     funded += sum(e["amount_cents"] for e in manual_events(plan, tree) if e["item_kind"] == "contribution")
 

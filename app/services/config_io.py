@@ -143,6 +143,7 @@ def export_config(db: Session) -> dict:
             "match_text": r.match_text,
             "amount_cents": r.amount_cents,
             "account": r.account.name if r.account else None,
+            "loan_account": r.loan_account.name if r.loan_account else None,
             "category": path_of.get(r.category_id, [r.category.name if r.category else str(r.category_id)]),
             "day_from": r.day_from,
             "day_to": r.day_to,
@@ -331,6 +332,10 @@ def _apply(db: Session, data: dict) -> dict[str, int]:
             existing_rules.append(rule)
         rule.account_id = accounts[account_name].id
         rule.category_id = cat.id
+        loan_name = entry.get("loan_account")
+        if loan_name is not None and loan_name not in accounts:
+            raise ConfigError(f"import rule {entry['match_text']!r}: unknown loan account {loan_name!r}")
+        rule.loan_account_id = accounts[loan_name].id if loan_name is not None else None
         rule.amount_cents = int(entry["amount_cents"]) if entry.get("amount_cents") is not None else None
         rule.day_from = int(entry["day_from"]) if entry.get("day_from") is not None else None
         rule.day_to = int(entry["day_to"]) if entry.get("day_to") is not None else None

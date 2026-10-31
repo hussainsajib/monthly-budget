@@ -137,8 +137,8 @@ export const api = {
     post<{ updated: number }>('/import/balances', { items }),
   applyImportRules: (
     accountId: number | null,
-    rows: Pick<ImportPreviewRow, 'date' | 'description' | 'amount_cents' | 'direction' | 'category_id'>[],
-  ) => post<{ category_ids: (number | null)[] }>('/import/apply-rules', { account_id: accountId, rows }),
+    rows: Pick<ImportPreviewRow, 'date' | 'description' | 'amount_cents' | 'direction' | 'category_id' | 'loan_account_id'>[],
+  ) => post<{ category_ids: (number | null)[]; loan_account_ids: (number | null)[] }>('/import/apply-rules', { account_id: accountId, rows }),
 
   importRules: () => get<ImportRule[]>('/import-rules'),
   createImportRule: (b: ImportRuleBody) => post<{ id: number }>('/import-rules', b),

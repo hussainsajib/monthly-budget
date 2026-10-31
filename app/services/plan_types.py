@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 class ConfigField:
     key: str
     label: str
-    kind: str  # money | int | date | text | select | category | categories | paycheck
+    kind: str  # money | int | date | text | select | category | categories | paycheck | loan
     placeholder: str = ""
     help: str = ""
     options: tuple[tuple[str, str], ...] = ()
@@ -97,6 +97,13 @@ PLAN_TYPES: tuple[PlanType, ...] = (
                 "Optional. Progress is measured from this category's transactions, net of spending. "
                 "Set a target account to split funding from spending.",
             ),
+            ConfigField(
+                "loan_account_id",
+                "Loan being paid",
+                "loan",
+                "",
+                "Optional. Payments recorded on this loan count as progress, in place of the funding category.",
+            ),
         ),
     ),
     PlanType(
@@ -126,6 +133,13 @@ PLAN_TYPES: tuple[PlanType, ...] = (
                 "",
                 "Optional. Progress is measured from this category's transactions, net of spending. "
                 "Set a target account to split funding from spending.",
+            ),
+            ConfigField(
+                "loan_account_id",
+                "Loan being paid",
+                "loan",
+                "",
+                "Optional. Payments recorded on this loan count as progress, in place of the funding category.",
             ),
         ),
     ),

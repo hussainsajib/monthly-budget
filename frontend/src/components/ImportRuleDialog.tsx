@@ -17,8 +17,11 @@ export interface RuleDraft {
   day_from: number | null
   day_to: number | null
   category_id: number | null
+  loan_account_id: number | null
   is_active: boolean
 }
+
+export type ReadyRuleDraft = RuleDraft & { account_id: number }
 
 export const EMPTY_RULE: RuleDraft = {
   match_text: '',
@@ -27,31 +30,42 @@ export const EMPTY_RULE: RuleDraft = {
   day_from: null,
   day_to: null,
   category_id: null,
+  loan_account_id: null,
   is_active: true,
 }
 
-export const ruleToDraft = (r: ImportRule): RuleDraft & { account_id: number; category_id: number } => ({
+export const ruleToDraft = (r: ImportRule): ReadyRuleDraft => ({
   match_text: r.match_text,
   amount: centsToInput(r.amount_cents),
   account_id: r.account_id,
   day_from: r.day_from,
   day_to: r.day_to,
-  category_id: r.category_id,
+  category_id: r.loan_account_id != null ? null : r.category_id,
+  loan_account_id: r.loan_account_id,
   is_active: r.is_active,
 })
+
+/** Why a draft cannot be saved yet, or null when it is ready. */
+export function draftProblem(d: RuleDraft): string | null {
+  if (!hasIdentifier(d)) return 'Add a description, an amount, or a date to identify the transaction'
+  if (d.account_id == null) return 'Pick an account'
+  if (d.loan_account_id == null && d.category_id == null) return 'Pick a category or a loan to pay'
+  return null
+}
 
 /** A rule needs at least one of description, amount or day to identify a transaction. */
 export const hasIdentifier = (d: RuleDraft) =>
   d.match_text.trim() !== '' || d.amount.trim() !== '' || d.day_from !== null || d.day_to !== null
 
-export function draftToBody(d: RuleDraft & { account_id: number; category_id: number }, sortOrder = 0): ImportRuleBody {
+export function draftToBody(d: ReadyRuleDraft, sortOrder = 0): ImportRuleBody {
   return {
     match_text: d.match_text,
     amount: d.amount || null,
     account_id: d.account_id,
     day_from: d.day_from,
     day_to: d.day_to,
-    category_id: d.category_id,
+    category_id: d.loan_account_id != null ? null : d.category_id,
+    loan_account_id: d.loan_account_id,
     sort_order: sortOrder,
     is_active: d.is_active,
   }
@@ -61,6 +75,12 @@ export function DraftFields({ draft, onChange, idPrefix }: { draft: RuleDraft; o
   const set = <K extends keyof RuleDraft>(k: K, v: RuleDraft[K]) => onChange({ ...draft, [k]: v })
   const accounts = useAccounts().data ?? []
   const categories = useImportCategories().data ?? []
+  const loanOptions = [
+    { value: '', label: 'None, assign a category' },
+    ...accounts
+      .filter((a) => a.is_loan && a.is_active && a.id !== draft.account_id)
+      .map((a) => ({ value: String(a.id), label: a.name })),
+  ]
   const [adding, setAdding] = useState(false)
   return (
     <>
@@ -121,6 +141,18 @@ export function DraftFields({ draft, onChange, idPrefix }: { draft: RuleDraft; o
           onChange={(e) => set('day_to', e.target.value === '' ? null : Number(e.target.value))}
         />
       </div>
+      <div className="field-full">
+        <label htmlFor={`${idPrefix}-loan`}>Pay a loan</label>
+        <OptionSelect
+          id={`${idPrefix}-loan`}
+          label="Loan to pay"
+          searchable
+          value={draft.loan_account_id == null ? '' : String(draft.loan_account_id)}
+          onChange={(v) => set('loan_account_id', v === '' ? null : Number(v))}
+          options={loanOptions}
+        />
+      </div>
+      {draft.loan_account_id == null && (
       <div className="form-grid field-full category-cascade">
         <div>
           <div className="row" style={{ alignItems: 'center', gap: 8, marginBottom: 4 }}>
@@ -140,6 +172,7 @@ export function DraftFields({ draft, onChange, idPrefix }: { draft: RuleDraft; o
           <CategorySelect categories={categories} value={draft.category_id} onChange={(id) => set('category_id', id)} cascade />
         </div>
       </div>
+      )}
       {adding && (
         <AddCategoryModal
           categories={categories}
@@ -168,11 +201,9 @@ export function AddImportRuleModal({
   const { fail } = useToast()
   const [draft, setDraft] = useState<RuleDraft>(initial)
 
-  function valid(d: RuleDraft): d is RuleDraft & { account_id: number; category_id: number } {
-    if (!hasIdentifier(d)) return fail('Add a description, an amount, or a date to identify the transaction') ?? false
-    if (d.account_id == null) return fail('Pick an account') ?? false
-    if (d.category_id == null) return fail('Pick a category') ?? false
-    return true
+  function valid(d: RuleDraft): d is ReadyRuleDraft {
+    const problem = draftProblem(d)
+    return problem ? (fail(problem) ?? false) : true
   }
 
   async function submit(e: FormEvent) {
@@ -210,7 +241,7 @@ export function AddImportRuleModal({
 
 const ruleLabel = (r: ImportRule) => {
   const what = [r.match_text, r.amount_cents != null ? `$${centsToInput(r.amount_cents)}` : ''].filter(Boolean).join(' · ')
-  return `${what || 'Any transaction'} → ${r.category_path}${r.account_name ? ` (${r.account_name})` : ''}`
+  return `${what || 'Any transaction'} → ${r.loan_account_name ? `pay ${r.loan_account_name}` : r.category_path}${r.account_name ? ` (${r.account_name})` : ''}`
 }
 
 const mergeMatchText = (ruleText: string, rowText: string) => {
@@ -249,10 +280,9 @@ export function UpdateImportRuleModal({
   async function submit(e: FormEvent) {
     e.preventDefault()
     if (!rule) return fail('Pick the rule to update')
-    if (!hasIdentifier(draft)) return fail('Add a description, an amount, or a date to identify the transaction')
-    if (draft.account_id == null) return fail('Pick an account')
-    if (draft.category_id == null) return fail('Pick a category')
-    const body = draftToBody({ ...draft, account_id: draft.account_id, category_id: draft.category_id }, rule.sort_order)
+    const problem = draftProblem(draft)
+    if (problem || draft.account_id == null) return fail(problem ?? 'Pick an account')
+    const body = draftToBody({ ...draft, account_id: draft.account_id }, rule.sort_order)
     if (await run(() => api.updateImportRule(rule.id, body), 'Updated rule')) {
       onUpdated?.()
       onClose()

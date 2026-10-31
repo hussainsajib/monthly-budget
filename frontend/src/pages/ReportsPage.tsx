@@ -185,11 +185,33 @@ export default function ReportsPage() {
                   )
                 })}
                 <tr className="root">
+                  <td>Total income</td>
+                  {r.income_months.map((c, i) => (
+                    <Fragment key={i}>
+                      <td className="num muted">{formatMoney(r.income_budgets[i], true)}</td>
+                      <td className={`num ${tone(c, r.income_budgets[i], false)}`}>
+                        {formatMoney(c, true) || formatMoney(0)}
+                      </td>
+                    </Fragment>
+                  ))}
+                </tr>
+                <tr className="root">
+                  <td>Total expenses</td>
+                  {r.expense_months.map((c, i) => (
+                    <Fragment key={i}>
+                      <td className="num muted">{formatMoney(r.expense_budgets[i], true)}</td>
+                      <td className={`num ${tone(c, r.expense_budgets[i])}`}>
+                        {formatMoney(c, true) || formatMoney(0)}
+                      </td>
+                    </Fragment>
+                  ))}
+                </tr>
+                <tr className="root">
                   <td>NET (income − expenses)</td>
                   {r.net_months.map((c, i) => (
                     <Fragment key={i}>
                       <td className="num muted">{formatMoney(r.net_budgets[i], true)}</td>
-                      <td className={`num ${tone(c, r.net_budgets[i], false)}`}>
+                      <td className={`num ${c > 0 ? 'under' : c < 0 ? 'over' : ''}`}>
                         <Link
                           to={`/reports/net/${r.months[i]}`}
                           className="net-link"

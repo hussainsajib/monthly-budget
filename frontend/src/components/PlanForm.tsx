@@ -115,12 +115,14 @@ function ConfigFieldInput({
   value,
   onChange,
   categories,
+  accounts,
   idPrefix,
 }: {
   field: PlanConfigField
   value: ConfigValue
   onChange: (v: ConfigValue) => void
   categories: ReturnType<typeof useCategories>['data']
+  accounts: ReturnType<typeof useAccounts>['data']
   idPrefix: string
 }) {
   const id = `${idPrefix}-${field.key}`
@@ -139,6 +141,21 @@ function ConfigFieldInput({
     )
   }
   const str = typeof value === 'string' ? value : ''
+  if (field.kind === 'loan') {
+    return (
+      <div className="field-full">
+        <label htmlFor={id}>{field.label}</label>
+        <AccountSelect
+          id={id}
+          accounts={(accounts ?? []).filter((a) => a.is_loan && a.is_active)}
+          value={str ? Number(str) : null}
+          onChange={(v) => onChange(v == null ? '' : String(v))}
+          blank="— none —"
+        />
+        {field.help && <span className="small muted">{field.help}</span>}
+      </div>
+    )
+  }
   if (field.kind === 'category') {
     return (
       <div className="field-full">
@@ -461,6 +478,7 @@ export function PlanFormModal({
                 value={config[f.key] ?? ''}
                 onChange={(v) => setConfig((prev) => ({ ...prev, [f.key]: v }))}
                 categories={categories}
+                accounts={accounts}
                 idPrefix="plan-cfg"
               />
             ),

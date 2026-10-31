@@ -119,6 +119,7 @@ tr.next td:first-child { border-left: 2px solid var(--accent); }
 .stat { display: flex; gap: 24px; flex-wrap: wrap; align-items: center; }
 .stat > div { text-align: center; }
 .row > .stat { flex: 0 1 auto; margin-left: auto; }
+.stat.spread > div { flex: 1 1 140px; }
 .stat div b { display: block; font-family: var(--font-money); font-size: 22px; font-variant-numeric: tabular-nums; }
 .charts { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
 .chart-box { position: relative; height: 300px; }

@@ -927,6 +927,7 @@ class ImportRow(BaseModel):
     key: str
     recurring_template_id: int | None = None
     balance_cents: int | None = None
+    loan_account_id: int | None = None
 
 
 class ImportCommitBody(BaseModel):
@@ -959,6 +960,7 @@ async def import_preview(
             "duplicate": r.duplicate,
             "key": r.key,
             "balance_cents": r.balance_cents,
+            "loan_account_id": r.loan_account_id,
         }
         for r in rows
     ]
@@ -983,6 +985,7 @@ def import_commit(body: ImportCommitBody, db: Session = Depends(get_db)):
             key=r.key,
             recurring_template_id=r.recurring_template_id,
             balance_cents=r.balance_cents,
+            loan_account_id=r.loan_account_id,
         )
         for r in body.rows
     ]
@@ -1009,6 +1012,7 @@ class ApplyRulesRow(BaseModel):
     amount_cents: int
     direction: str
     category_id: int | None = None
+    loan_account_id: int | None = None
 
 
 class ApplyRulesBody(BaseModel):
@@ -1021,11 +1025,21 @@ def apply_import_rules(body: ApplyRulesBody, db: Session = Depends(get_db)):
     """Fill categories a preview left blank from the current rules (used after adding a rule)."""
     with user_errors():
         parsed = [
-            importing.ParsedRow(r.date, r.description, r.amount_cents, r.direction, category_id=r.category_id)
+            importing.ParsedRow(
+                r.date,
+                r.description,
+                r.amount_cents,
+                r.direction,
+                category_id=r.category_id,
+                loan_account_id=r.loan_account_id,
+            )
             for r in body.rows
         ]
         importing.apply_rules(db, parsed, body.account_id)
-    return {"category_ids": [r.category_id for r in parsed]}
+    return {
+        "category_ids": [r.category_id for r in parsed],
+        "loan_account_ids": [r.loan_account_id for r in parsed],
+    }
 
 
 class ImportRuleBody(BaseModel):
@@ -1034,7 +1048,8 @@ class ImportRuleBody(BaseModel):
     account_id: int
     day_from: int | None = None
     day_to: int | None = None
-    category_id: int
+    category_id: int | None = None
+    loan_account_id: int | None = None
     sort_order: int = 0
     is_active: bool = True
 
@@ -1050,6 +1065,8 @@ def _rule_out(rule: ImportRule, tree: CategoryTree) -> dict:
         "day_to": rule.day_to,
         "category_id": rule.category_id,
         "category_path": tree.path(rule.category_id),
+        "loan_account_id": rule.loan_account_id,
+        "loan_account_name": rule.loan_account.name if rule.loan_account else None,
         "sort_order": rule.sort_order,
         "is_active": rule.is_active,
     }
@@ -1076,6 +1093,7 @@ def create_import_rule(body: ImportRuleBody, db: Session = Depends(get_db)):
             body.day_from,
             body.day_to,
             _rule_amount_cents(body),
+            body.loan_account_id,
         )
     return {"id": rule.id}
 
@@ -1094,6 +1112,7 @@ def update_import_rule(rule_id: int, body: ImportRuleBody, db: Session = Depends
             body.sort_order,
             body.is_active,
             _rule_amount_cents(body),
+            body.loan_account_id,
         )
     return {"ok": True}
 
@@ -1203,6 +1222,8 @@ def get_report(db: Session = Depends(get_db), month: int | None = None, as_of: d
         "months": report.months,
         "month": m + 1,
         "net_months": report.net_months,
+        "income_months": report.income_months,
+        "expense_months": report.expense_months,
         "expense_budgets": report.expense_budgets,
         "income_budgets": report.income_budgets,
         "net_budgets": [
