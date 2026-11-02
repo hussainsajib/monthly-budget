@@ -574,7 +574,7 @@ def _txn_out(t: Transaction, tree: CategoryTree, peer: Transaction | None = None
         "reimbursement_id": t.link_id if t.link_kind == REIMBURSEMENT else None,
         "reimbursement_account_id": peer.account_id if peer else None,
         "reimbursement_account_name": peer.account.name if peer and peer.account else None,
-        "planned": t.date > date.today(),
+        "planned": t.is_planned(date.today()),
     }
 
 
@@ -1211,12 +1211,12 @@ def get_report(db: Session = Depends(get_db), month: int | None = None, as_of: d
     """Rolling report over the last ``WINDOW_MONTHS`` months.
 
     ``month`` is a 1-based position in that window and only drives the category chart; it defaults
-    to the last month with activity. ``as_of`` pins the end of the window instead of today.
+    to the current (last) month of the window. ``as_of`` pins the end of the window instead of today.
     """
     anchor = as_of or date.today()
     report = reports.budget_report(db, as_of=anchor)
     n = len(report.window)
-    default = (report.last_active_index + 1) if report.last_active_index is not None else n
+    default = n
     m = min(max((month or default) - 1, 0), n - 1)
     return {
         "months": report.months,

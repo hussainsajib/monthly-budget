@@ -658,7 +658,7 @@ export default function TransactionsPage() {
       />
 
       {adding && (
-        <Modal title="Add transaction" onClose={() => setAdding(false)}>
+        <Modal title="Add transaction" narrow onClose={() => setAdding(false)}>
           <div className="segmented" role="group" aria-label="Entry type">
             <button type="button" className={addMode === 'txn' ? 'on' : ''} onClick={() => setAddMode('txn')}>
               Transaction
@@ -669,7 +669,10 @@ export default function TransactionsPage() {
           </div>
           {addMode === 'txn' ? (
             <TxnForm
-              big
+              plain
+              stacked
+              cascade
+              autoFocus
               initial={initial}
               descriptions={descriptions.data ?? []}
               submitLabel="Add"
@@ -689,7 +692,7 @@ export default function TransactionsPage() {
             />
           ) : (
             <TransferForm
-              big
+              plain
               initial={transferInitial}
               submitLabel="Add"
               onSubmit={async (v) => {

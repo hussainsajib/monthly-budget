@@ -58,7 +58,7 @@ def _walk(db: Session, account: Account, today: date) -> tuple[list[LedgerRow], 
     for txn in db.scalars(stmt).unique():
         delta = txn.cash_delta_cents(txn.category.kind in income)
         balance += delta
-        planned = txn.date > today
+        planned = txn.is_planned(today)
         if not planned:
             current = balance
         rows.append(LedgerRow(txn, delta, balance, planned, ""))

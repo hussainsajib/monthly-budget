@@ -11,7 +11,7 @@ import type { ReportRow } from '../types'
 const dollars = (v: unknown) => formatMoney(Math.round(Number(v) * 100))
 
 export default function ReportsPage() {
-  const [month, setMonth] = useState<number | null>(null) // null = last month with activity
+  const [month, setMonth] = useState<number | null>(null) // null = current month
   const [collapsed, setCollapsed] = useState<Set<number> | null>(null)
   const report = useQuery({
     queryKey: ['report', month],

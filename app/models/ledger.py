@@ -130,6 +130,10 @@ class Transaction(Base):
     account: Mapped[Account | None] = relationship(lazy="joined")
     recurring_template = relationship("RecurringTemplate")
 
+    def is_planned(self, today: date) -> bool:
+        """Future-dated and typed in by hand; a bank-imported row is real even when the bank dates it ahead."""
+        return self.date > today and self.import_hash is None
+
     def cash_delta_cents(self, is_income: bool) -> int:
         """Effect on the owning account's balance; the caller resolves the category type's direction."""
         kind = self.category.kind if self.category is not None else EXPENSE

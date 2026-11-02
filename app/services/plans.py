@@ -23,6 +23,7 @@ from app.services.category_config import income_keys
 from app.services.events import LEDGER, MANUAL, RECURRING, event_stream, manual_events, recurring_events, to_public
 
 MATCH_WINDOW_DAYS = 5
+OVERDUE_TOLERANCE = 0.10  # a payment this close to a bill's amount (rent, utilities) still settles it
 DEFAULT_LOOKAHEAD = 2
 MAX_LOOKAHEAD = 6
 HORIZON_DAYS = 180  # how far ahead to look for paychecks
@@ -329,6 +330,55 @@ def _sort_events(events: list[dict]) -> None:
     )
 
 
+def _month_end(day: date) -> date:
+    return _next_month(day.replace(day=1)) - timedelta(days=1)
+
+
+def _overdue(db: Session, plan: Plan, tree, today: date) -> list[dict]:
+    """Scheduled bills from the previous month on that are dated before today with no matching payment.
+
+    Looks back one calendar month (and never before the plan's own start). A bill a payment has
+    already fulfilled is matched by ``_drift`` and drops out, so only what is still owed remains.
+    """
+    since = (today.replace(day=1) - timedelta(days=1)).replace(day=1)
+    if plan.start_date and plan.start_date > since:
+        since = plan.start_date
+    if since >= today:
+        return []
+    events = event_stream(
+        db, start=since, end=today - timedelta(days=1), sources=(RECURRING,), tree=tree, income_only=False
+    )
+    events = _drift(db, events)
+    used = {e["matched_transaction_id"] for e in events if e.get("matched_transaction_id")}
+    out: list[dict] = []
+    for e in events:
+        if e["direction"] != "out" or e.get("matched_transaction_id") is not None:
+            continue
+        if plan.account_id and e["account_id"] not in (None, plan.account_id):
+            continue
+        paid = db.scalars(
+            select(Transaction).where(
+                Transaction.category_id == e["category_id"],
+                Transaction.date >= e["date"] - timedelta(days=MATCH_WINDOW_DAYS),
+                Transaction.id.not_in(used) if used else True,
+            )
+        ).unique()
+        close = next(
+            (
+                t
+                for t in paid
+                if abs(abs(t.amount_cents) - abs(e["amount_cents"])) <= abs(e["amount_cents"]) * OVERDUE_TOLERANCE
+                and (not e["account_id"] or t.account_id in (None, e["account_id"]))
+            ),
+            None,
+        )
+        if close is not None:
+            used.add(close.id)
+            continue
+        out.append(dict(e, overdue=True))
+    return out
+
+
 def derive_rolling(db: Session, plan: Plan, tree) -> dict:
     config = _config(plan)
     today = date.today()
@@ -344,12 +394,14 @@ def derive_rolling(db: Session, plan: Plan, tree) -> dict:
     end = plan.end_date or (paychecks[-1] if paychecks else start + timedelta(days=NO_PAYCHECK_FALLBACK_DAYS))
 
     account = db.get(Account, plan.account_id) if plan.account_id else None
+    overdue = _overdue(db, plan, tree, today)
 
     # Forward-looking events drive the summary numbers (safe-to-spend, end balance). Rows dated today
     # or earlier are already inside ``opening`` below, so the projection starts after them.
     summary_events = event_stream(
         db, start=start, end=end, plan=plan, tree=tree, account_id=plan.account_id, after=today
     )
+    summary_events += [dict(e) for e in overdue]
     summary_events.sort(key=lambda e: (e["date"] or start, e["source"] != "manual"))
 
     opening = build_ledger(db, account).current_balance_cents if account else 0
@@ -364,20 +416,32 @@ def derive_rolling(db: Session, plan: Plan, tree) -> dict:
     # expense whose day has gone by still shows up - matched to the transaction that recorded it, or
     # left "planned" when no such transaction exists yet. Income occurrences stay forward-looking;
     # past income shows as the real transactions that recorded it.
+    # Bills due after the last paycheck but before its month ends (a month-end bill, say) still show
+    # as upcoming; the summary numbers above stop at the last paycheck, which later pay will cover.
     window_start = plan.start_date or date(today.year, today.month, 1)
+    shown_end = plan.end_date or max(end, _month_end(end))
     planned = event_stream(
         db, start=start, end=end, sources=(RECURRING,), tree=tree, income_only=True
     )
     planned += event_stream(
-        db, start=window_start, end=end, sources=(RECURRING,), tree=tree, income_only=False
+        db, start=window_start, end=shown_end, sources=(RECURRING,), tree=tree, income_only=False
     )
-    planned += event_stream(db, start=start, end=end, sources=(MANUAL,), plan=plan, tree=tree)
+    planned += event_stream(db, start=start, end=shown_end, sources=(MANUAL,), plan=plan, tree=tree)
     planned = _drift(db, planned)
+    overdue_keys = {(e["ref_id"], e["date"]) for e in overdue}
+    shown_keys = set()
+    for e in planned:
+        if e["source"] == RECURRING:
+            shown_keys.add((e["ref_id"], e["date"]))
+            if (e["ref_id"], e["date"]) in overdue_keys:
+                e["overdue"] = True
+    planned += [e for e in overdue if (e["ref_id"], e["date"]) not in shown_keys]
+    shown_start = min([window_start] + [e["date"] for e in overdue])
     matched_ids = {e["matched_transaction_id"] for e in planned if e.get("matched_transaction_id")}
     leftovers = [
         e
         for e in event_stream(
-            db, start=window_start, end=end, sources=(LEDGER,), account_id=plan.account_id, tree=tree
+            db, start=window_start, end=shown_end, sources=(LEDGER,), account_id=plan.account_id, tree=tree
         )
         if e["matched_transaction_id"] not in matched_ids
     ]
@@ -391,7 +455,7 @@ def derive_rolling(db: Session, plan: Plan, tree) -> dict:
 
     return {
         "kind": "rolling",
-        "window": {"start": window_start.isoformat(), "end": end.isoformat()},
+        "window": {"start": shown_start.isoformat(), "end": shown_end.isoformat()},
         "lookahead_paychecks": lookahead,
         "paycheck": (
             {

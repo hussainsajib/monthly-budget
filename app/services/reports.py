@@ -10,7 +10,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
 
-from sqlalchemy import extract, func, select
+from sqlalchemy import and_, extract, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import TRANSFER, Category, Transaction
@@ -109,6 +109,19 @@ def _shift_month(month: date, delta: int) -> date:
     return date(index // 12, index % 12 + 1, 1)
 
 
+def _counted_by(as_of: date):
+    """Rows that have happened by ``as_of``: dated up to it, or bank-imported within its month.
+
+    A bank sometimes dates a posted transaction a day or two ahead; that row is real, so it counts
+    in its own month rather than waiting for the calendar to catch up.
+    """
+    month_end = _shift_month(date(as_of.year, as_of.month, 1), 1)
+    return or_(
+        Transaction.date <= as_of,
+        and_(Transaction.import_hash.is_not(None), Transaction.date < month_end),
+    )
+
+
 def rolling_window(as_of: date, months: int = WINDOW_MONTHS) -> list[date]:
     """First-of-month dates for the ``months`` calendar months ending with ``as_of``'s month."""
     first = _shift_month(date(as_of.year, as_of.month, 1), -(months - 1))
@@ -118,7 +131,8 @@ def rolling_window(as_of: date, months: int = WINDOW_MONTHS) -> list[date]:
 def budget_report(db: Session, window_months: int = WINDOW_MONTHS, as_of: date | None = None) -> BudgetReport:
     """Aggregate actuals for the rolling window ending in ``as_of``'s month.
 
-    Future-dated (planned) rows are excluded, and the current month is only counted up to ``as_of``.
+    Future-dated (planned) rows are excluded, and the current month is only counted up to ``as_of``,
+    except bank-imported rows, which count in their own month even when dated ahead.
     """
     as_of = as_of or date.today()
     window = rolling_window(as_of, window_months)
@@ -130,7 +144,7 @@ def budget_report(db: Session, window_months: int = WINDOW_MONTHS, as_of: date |
         select(Transaction.category_id, year.label("y"), month.label("m"), func.sum(Transaction.amount_cents))
         .where(
             Transaction.date >= window[0],
-            Transaction.date <= as_of,
+            _counted_by(as_of),
             Transaction.link_id.is_(None),  # paired transfers/reimbursements are not income or expense
             ~Transaction.category.has(Category.kind == TRANSFER),  # pending transfer legs neither
         )
@@ -299,7 +313,7 @@ def net_transactions(db: Session, month: date, category_id: int, as_of: date | N
             Transaction.category_id.in_(node.subtree_ids()),
             Transaction.date >= month,
             Transaction.date < next_month,
-            Transaction.date <= as_of,
+            _counted_by(as_of),
             Transaction.link_id.is_(None),
             ~Transaction.category.has(Category.kind == TRANSFER),
         )

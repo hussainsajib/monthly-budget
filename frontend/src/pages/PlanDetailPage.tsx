@@ -609,7 +609,10 @@ function EventsTable({ events }: { events: PlanEvent[] }) {
                   {e.date ?? '—'}
                   {isNext && <span className="chip event-next-chip">next</span>}
                 </td>
-                <td>{e.description}</td>
+                <td>
+                  {e.description}
+                  {e.overdue && <span className="chip event-next-chip">overdue</span>}
+                </td>
                 <td className="muted">{e.category_path || '—'}</td>
                 <td className="num money">{formatMoney(planned)}</td>
                 <td className="num money">{actual == null ? '—' : formatMoney(actual)}</td>

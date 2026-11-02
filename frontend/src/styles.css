@@ -209,6 +209,10 @@ a.num-link:hover { color: var(--accent); }
 .modal-overlay.center { align-items: center; }
 .range-pop { background: color-mix(in srgb, var(--accent) 6%, var(--surface)); border: 1px solid var(--accent); border-radius: 12px; padding: 16px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25); }
 .modal { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; max-width: 900px; width: 100%; padding: 20px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25); }
+.modal.narrow { max-width: 600px; }
+.modal-body > .segmented { margin-bottom: 16px; }
+.modal-body .form-section { margin-top: 16px; }
+.modal-body .form-section:first-of-type { margin-top: 0; }
 .modal:focus { outline: none; }
 .form-grid { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .form-grid .field-full { grid-column: 1 / -1; }

@@ -366,6 +366,7 @@ export interface PlanEvent {
   actual_cents: number | null
   variance_cents: number | null
   balance_cents?: number | null
+  overdue?: boolean
 }
 
 export interface PlanDerived {

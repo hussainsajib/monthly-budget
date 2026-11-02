@@ -90,7 +90,17 @@ export function Loading({ query }: { query: { isPending: boolean; isError: boole
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
-export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+export function Modal({
+  title,
+  onClose,
+  narrow,
+  children,
+}: {
+  title: string
+  onClose: () => void
+  narrow?: boolean
+  children: ReactNode
+}) {
   const ref = useRef<HTMLDivElement>(null)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
@@ -126,7 +136,7 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div ref={ref} className="modal" role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
+      <div ref={ref} className={narrow ? 'modal narrow' : 'modal'} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <h2>{title}</h2>
           <button type="button" className="icon-btn ghost" aria-label="Close" onClick={onClose}>

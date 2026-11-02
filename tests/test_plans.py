@@ -658,3 +658,57 @@ def test_goal_progress_from_payments_to_a_loan(client, ids, db):
         db.query(Transaction).delete()
         db.delete(loan)
         db.commit()
+
+
+def test_rolling_plan_flags_an_unpaid_past_bill_as_overdue_and_counts_it(client, ids, db):
+    from datetime import timedelta
+
+    from app.models import RecurringTemplate, Transaction
+
+    cats, accs = ids
+    due = date.today() - timedelta(days=3)
+    tpl = RecurringTemplate(
+        description="Test bill",
+        category_id=cats["Grocery"],
+        account_id=accs["Chequing"],
+        amount_cents=30000,
+        day_of_month=due.day,
+        schedule={"freq": "monthly", "interval": 1, "start": due.isoformat(), "by_month_day": [due.day]},
+    )
+    db.add(tpl)
+    db.commit()
+    plan_id = None
+    try:
+        plan_id = client.post(
+            "/api/plans",
+            json={"name": "Pay", "type": "rolling", "account_id": accs["Chequing"], "config": {}},
+        ).json()["id"]
+
+        def derived():
+            return client.get(f"/api/plans/{plan_id}").json()["derived"]
+
+        base = derived()
+        overdue = [e for e in base["events"] if e.get("overdue") and e["description"] == "Test bill"]
+        assert [(e["description"], e["amount_cents"], e["date"]) for e in overdue] == [
+            ("Test bill", 30000, due.isoformat())
+        ]
+        assert base["outflow_cents"] >= 30000
+
+        client.post(
+            "/api/transactions",
+            json={
+                "date": due.isoformat(),
+                "description": "paid a little different",
+                "category_id": cats["Grocery"],
+                "account_id": accs["Chequing"],
+                "amount": "305",
+                "notes": "",
+            },
+        )
+        assert not [e for e in derived()["events"] if e.get("overdue") and e["description"] == "Test bill"]
+    finally:
+        if plan_id is not None:
+            client.delete(f"/api/plans/{plan_id}")
+        db.query(Transaction).delete()
+        db.delete(tpl)
+        db.commit()

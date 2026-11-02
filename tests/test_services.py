@@ -232,3 +232,34 @@ def test_apply_rules_lets_a_loan_rule_override_a_history_category(db, ids):
         assert rows[0].loan_account_id == loan.id and rows[0].category_id == rule.category_id
     finally:
         _loan_rule_cleanup(db, loan, rule)
+
+
+def test_an_imported_future_dated_row_is_not_planned(db, ids):
+    from datetime import timedelta
+
+    cats, accs = ids
+    tomorrow = date.today() + timedelta(days=1)
+    rows = [importing.ParsedRow(tomorrow, "BANK POSTED AHEAD", 1000, "out", category_id=cats["Grocery"], key="k1")]
+    importing.commit_rows(db, rows, accs["Chequing"])
+    manual = _add(db, cats["Grocery"], 500, tomorrow, "typed in", accs["Chequing"])
+    ledger = cashflow.build_ledger(db, db.get(Account, accs["Chequing"]))
+    planned = {r.txn.description: r.is_planned for r in ledger.rows}
+    assert planned["BANK POSTED AHEAD"] is False and planned["typed in"] is True
+    assert manual.is_planned(date.today()) is True
+
+
+def test_report_counts_imported_rows_dated_ahead_within_the_month(db, ids):
+    cats, accs = ids
+    as_of = date(2026, 11, 1)
+    importing.commit_rows(
+        db,
+        [
+            importing.ParsedRow(date(2026, 11, 2), "POSTED AHEAD", 1000, "out", category_id=cats["Grocery"], key="r1"),
+            importing.ParsedRow(date(2026, 12, 2), "NEXT MONTH", 7000, "out", category_id=cats["Grocery"], key="r2"),
+        ],
+        accs["Chequing"],
+    )
+    _add(db, cats["Grocery"], 500, date(2026, 11, 2), "typed ahead", accs["Chequing"])
+    report = reports.budget_report(db, as_of=as_of)
+    row = {r.name: r for r in report.rows}["Grocery"]
+    assert row.months[-1] == 1000
