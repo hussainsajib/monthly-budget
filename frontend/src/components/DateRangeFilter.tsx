@@ -1,4 +1,4 @@
-import { RANGE_OPTIONS, type RangeKey } from '../dateRange'
+import { RANGE_OPTIONS, blockEmptyDateSpin, type RangeKey } from '../dateRange'
 
 interface DateRangeFilterProps {
   rangeKey: RangeKey
@@ -20,11 +20,11 @@ export function DateRangeFilter({ rangeKey, start, end, onRange, onCustom }: Dat
       </div>
       <div>
         <label htmlFor="hdr-start">From</label>
-        <input id="hdr-start" type="date" value={start} onChange={(e) => onCustom({ start: e.target.value, end })} />
+        <input id="hdr-start" type="date" onKeyDown={blockEmptyDateSpin} value={start} onChange={(e) => onCustom({ start: e.target.value, end })} />
       </div>
       <div>
         <label htmlFor="hdr-end">To</label>
-        <input id="hdr-end" type="date" value={end} onChange={(e) => onCustom({ start, end: e.target.value })} />
+        <input id="hdr-end" type="date" onKeyDown={blockEmptyDateSpin} value={end} onChange={(e) => onCustom({ start, end: e.target.value })} />
       </div>
     </>
   )

@@ -361,3 +361,22 @@ a.icon-btn { text-decoration: none; }
 html { scrollbar-gutter: stable; }
 .field-cat, .date-range { min-width: 0; }
 .row > .date-range { flex: 0 0 180px; }
+.daypicker-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.daypicker-hint { font-size: 13px; color: var(--ink-2); }
+.daypicker-months { display: flex; gap: 24px; flex-wrap: wrap; }
+.daypicker-month { width: 224px; }
+.daypicker-title { font-weight: 600; font-size: 13px; text-align: center; margin-bottom: 6px; }
+.daypicker-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.daypicker-dow { text-align: center; font-size: 11px; color: var(--muted); padding: 4px 0; }
+.daypicker-day { min-height: 30px; padding: 0; background: transparent; color: var(--ink); font-weight: 400; font-variant-numeric: tabular-nums; border-radius: 6px; }
+.daypicker-day:hover { background: var(--bg); }
+.daypicker-day.between { background: color-mix(in srgb, var(--accent) 14%, var(--surface)); border-radius: 0; }
+.daypicker-day.today { border: 1px solid var(--accent); }
+.daypicker-day.on { background: var(--accent); color: var(--accent-ink); }
+
+.daypicker-presets { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.chip.chip-split { display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; }
+.chip.chip-split button { background: transparent; color: inherit; border: 0; padding: 4px 0; min-height: 0; font-weight: inherit; font-size: inherit; display: inline-flex; align-items: center; }
+.chip.chip-split button:hover { color: var(--ink); }
+.chip.chip-split button + button svg { color: var(--muted); }
+.chip.chip-split button + button:hover svg { color: var(--bad); }

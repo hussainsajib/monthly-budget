@@ -1,8 +1,9 @@
-export type RangeKey = 'all' | 'month' | 'days30' | 'ytd' | 'custom'
+export type RangeKey = 'all' | 'month' | 'prevmonth' | 'days30' | 'ytd' | 'custom'
 
 export const RANGE_OPTIONS: Array<{ key: RangeKey; short: string; full: string }> = [
   { key: 'all', short: 'All', full: 'All time' },
   { key: 'month', short: 'Month', full: 'This month' },
+  { key: 'prevmonth', short: 'Prev', full: 'Previous month' },
   { key: 'days30', short: '30d', full: 'Last 30 days' },
   { key: 'ytd', short: 'YTD', full: 'Year to date' },
   { key: 'custom', short: 'Custom', full: 'Custom' },
@@ -21,6 +22,12 @@ export function rangeDates(key: Exclude<RangeKey, 'all' | 'custom'>): { start: s
       end: isoOf(new Date(now.getFullYear(), now.getMonth() + 1, 0)),
     }
   }
+  if (key === 'prevmonth') {
+    return {
+      start: isoOf(new Date(now.getFullYear(), now.getMonth() - 1, 1)),
+      end: isoOf(new Date(now.getFullYear(), now.getMonth(), 0)),
+    }
+  }
   if (key === 'days30') {
     const s = new Date(now)
     s.setDate(s.getDate() - 29)
@@ -30,11 +37,15 @@ export function rangeDates(key: Exclude<RangeKey, 'all' | 'custom'>): { start: s
 }
 
 export function parseRangeKey(v: string | null | undefined): RangeKey {
-  return v === 'custom' || v === 'month' || v === 'days30' || v === 'ytd' ? v : 'all'
+  return v === 'custom' || v === 'month' || v === 'prevmonth' || v === 'days30' || v === 'ytd' ? v : 'all'
 }
 
 export function resolveRange(key: RangeKey, start: string, end: string): { start: string; end: string } {
   if (key === 'custom') return { start, end }
   if (key === 'all') return { start: '', end: '' }
   return rangeDates(key)
+}
+
+export function blockEmptyDateSpin(e: { key: string; currentTarget: { value: string }; preventDefault: () => void }) {
+  if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.currentTarget.value) e.preventDefault()
 }

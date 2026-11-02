@@ -14,6 +14,7 @@ import TxnForm, { type TxnFormValues } from '../components/TxnForm'
 import { ColumnFilter } from '../components/ColumnFilter'
 import { Modal } from '../components/ui'
 import { DateRangeFilter } from '../components/DateRangeFilter'
+import { RangePicker } from '../components/DayPicker'
 import { RANGE_OPTIONS, parseRangeKey, resolveRange, type RangeKey } from '../dateRange'
 import { formatMoney, todayIso } from '../money'
 import { useAccounts, useCategories, useCategoryConfig, useImportCategories } from '../queries'
@@ -139,6 +140,15 @@ export default function TransactionsPage() {
     })
     setCustomRange(null)
   }
+  const rangeOpen = customRange !== null
+  useEffect(() => {
+    if (!rangeOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setCustomRange(null)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [rangeOpen])
   const searchTimer = useRef<number | undefined>(undefined)
   const onSearchChange = (v: string) => {
     setField('q', v)
@@ -255,12 +265,17 @@ export default function TransactionsPage() {
     }
   }
 
-  const chips: { key: string; label: string; clear: () => void }[] = []
+  const chips: { key: string; label: string; clear: () => void; edit?: () => void }[] = []
   if (filters.q) chips.push({ key: 'q', label: `Search: ${filters.q}`, clear: () => clearField('q') })
   if (rangeKey !== 'all') {
     const label =
       rangeKey === 'custom' ? `Date: ${filters.start || '…'} – ${filters.end || '…'}` : `Date: ${RANGE_OPTIONS.find((o) => o.key === rangeKey)?.full ?? ''}`
-    chips.push({ key: 'range', label, clear: () => applyRange('all') })
+    chips.push({
+      key: 'range',
+      label,
+      clear: () => applyRange('all'),
+      edit: () => setCustomRange({ start: rangeDatesValue.start, end: rangeDatesValue.end }),
+    })
   }
   if (filters.category_id) {
     const c = categoryById.get(Number(filters.category_id))
@@ -503,12 +518,23 @@ export default function TransactionsPage() {
           </span>
         </div>
         <div className="filter-chips">
-            {chips.map((c) => (
-              <button key={c.key} type="button" className="chip chip-clear" onClick={c.clear}>
-                {c.label}
-                <X size={13} />
-              </button>
-            ))}
+            {chips.map((c) =>
+              c.edit ? (
+                <span key={c.key} className="chip chip-split">
+                  <button type="button" aria-label={`Edit ${c.label}`} onClick={c.edit}>
+                    {c.label}
+                  </button>
+                  <button type="button" aria-label={`Remove ${c.label}`} onClick={c.clear}>
+                    <X size={13} />
+                  </button>
+                </span>
+              ) : (
+                <button key={c.key} type="button" className="chip chip-clear" onClick={c.clear}>
+                  {c.label}
+                  <X size={13} />
+                </button>
+              ),
+            )}
           {chips.length > 0 && (
             <button type="button" className="link-button" onClick={clearFilters}>
               Clear all
@@ -574,34 +600,14 @@ export default function TransactionsPage() {
             aria-label="Custom date range"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="row">
-              <div className="date-field">
-                <label htmlFor="flt-start">From</label>
-                <input
-                  id="flt-start"
-                  type="date"
-                  value={customRange.start}
-                  onChange={(e) => {
-                    const n = { ...customRange, start: e.target.value }
-                    setCustomRange(n)
-                    if (n.start && n.end) applyRangeCustom(n)
-                  }}
-                />
-              </div>
-              <div className="date-field">
-                <label htmlFor="flt-end">To</label>
-                <input
-                  id="flt-end"
-                  type="date"
-                  value={customRange.end}
-                  onChange={(e) => {
-                    const n = { ...customRange, end: e.target.value }
-                    setCustomRange(n)
-                    if (n.start && n.end) applyRangeCustom(n)
-                  }}
-                />
-              </div>
-            </div>
+            <RangePicker
+              start={customRange.start}
+              end={customRange.end}
+              onChange={(r, done) => {
+                setCustomRange(r)
+                if (done) applyRangeCustom(r)
+              }}
+            />
           </div>
         </div>
       )}
